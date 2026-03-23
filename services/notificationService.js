@@ -1,4 +1,4 @@
-import Notification from "../model/Employer/Notification.js";
+import Notification from "../model/Notification.js";
 
 const formatDate = (date) =>
     new Date(date).toLocaleDateString('en-GB', {

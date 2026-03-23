@@ -20,7 +20,7 @@ import {
     deleteScheduleGroup,
     getActivityLogsByPhase,
 } from "../controllers/ScheduleController.js";
-import { authenticate, authenticateEmployee, authorize } from "../middleware/Employer/authMiddleware.js";
+import { authenticate, authenticateEmployee, authorize } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 const ADMIN_HR = ["EMPLOYER_ADMIN", "EMPLOYER_HR"];

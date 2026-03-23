@@ -1,7 +1,7 @@
-import Leave from '../../model/Employer/Leave.js';
-import Employee from '../../model/Employer/Employee.js';
-import EmployerUser from '../../model/Employer/EmployerUser.js';
-import Notification from '../../model/Employer/Notification.js';
+import Leave from '../../model/Leave.js';
+import Employee from '../../model/Employee.js';
+import EmployerUser from '../../model/EmployerUser.js';
+import Notification from '../../model/Notification.js';
 import mongoose from 'mongoose';
 
 // Import Joi validation schemas

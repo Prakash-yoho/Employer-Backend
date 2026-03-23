@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate, authenticateEmployee, authorize } from '../../middleware/Employer/authMiddleware.js';
+import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 import {
     createLeaveRequest,
     getMyLeaveRequests,
@@ -10,7 +10,7 @@ import {
     getLeaveBalance,
     cancelLeaveRequest,
     getUpcomingLeaves
-} from '../../controllers/Employer/leaveController.js';
+} from '../controllers/Employer/leaveController.js';
 
 const router = express.Router();
 

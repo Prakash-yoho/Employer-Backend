@@ -1,5 +1,5 @@
-import Ticket from '../../model/Employer/Ticket.js';
-import Employee from '../../model/Employer/Employee.js';
+import Ticket from '../../model/Ticket.js';
+import Employee from '../../model/Employee.js';
 import {
     createTicketSchema,
     updateTicketSchema,
@@ -7,9 +7,9 @@ import {
     forwardToITSchema,
     getTicketsQuerySchema
 } from '../../validations/Employer/ticketValidation.js';
-import EmployerUser from '../../model/Employer/EmployerUser.js';
+import EmployerUser from '../../model/EmployerUser.js';
 import NotificationService from '../../services/notificationService.js';
-import Notification from '../../model/Employer/Notification.js';
+import Notification from '../../model/Notification.js';
 
 // Create new ticket (Employee only)
 export const createTicket = async (req, res) => {

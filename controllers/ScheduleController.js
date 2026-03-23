@@ -1,6 +1,6 @@
 import Schedule from "../model/Schedule.js";
 import Phase from "../model/Phase.js";
-import Employee from "../model/Employer/Employee.js";
+import Employee from "../model/Employee.js";
 import mongoose from "mongoose";
 import ActivityLogPhaseSchedule from "../model/ActivityLogPhaseSchedule.js";
 import { createScheduleValidation, updateScheduleValidation } from "../validations/ScheduleValidation.js";

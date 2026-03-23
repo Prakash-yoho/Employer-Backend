@@ -1,7 +1,7 @@
 import express from 'express';
-import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage } from '../../controllers/Employer/employeeController.js';
-import { authenticate, authenticateEmployee, authorize } from '../../middleware/Employer/authMiddleware.js';
-import upload, { handleMulterError } from '../../config/imageMulter.js'
+import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage } from '../controllers/Employer/employeeController.js';
+import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
+import upload, { handleMulterError } from '../config/imageMulter.js'
 
 const router = express.Router();
 

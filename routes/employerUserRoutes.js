@@ -1,7 +1,7 @@
 import express from 'express';
-import { authenticate } from '../../middleware/Employer/authMiddleware.js';
-import { authorize } from '../../middleware/Employer/authMiddleware.js';
-import { createAdminEmployerUser, createEmployerUser, employerAdminLogin, employerUserLogin, employerUserLogout, getAllEmployerUsers, getEmployerUserById, getMyProfile, hardDeleteEmployerUser, projectManagerLogin, reactivateEmployerUser, softDeleteEmployerUser, updateEmployerUser, updateMyProfile } from '../../controllers/Employer/employerUserController.js';
+import { authenticate } from '../middleware/authMiddleware.js';
+import { authorize } from '../middleware/authMiddleware.js';
+import { createAdminEmployerUser, createEmployerUser, employerAdminLogin, employerUserLogin, employerUserLogout, getAllEmployerUsers, getEmployerUserById, getMyProfile, hardDeleteEmployerUser, projectManagerLogin, reactivateEmployerUser, softDeleteEmployerUser, updateEmployerUser, updateMyProfile } from '../controllers/Employer/employerUserController.js';
 
 const router = express.Router();
 // Public route to initialize admin user

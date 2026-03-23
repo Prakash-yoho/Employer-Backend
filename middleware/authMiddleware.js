@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
-import BlacklistedToken from '../../model/BlacklistedToken.js';
-import EmployerUser from '../../model/Employer/EmployerUser.js';
-import Employee from '../../model/Employer/Employee.js';
+import BlacklistedToken from '../model/BlacklistedToken.js';
+import EmployerUser from '../model/EmployerUser.js';
+import Employee from '../model/Employee.js';
 
 export const authenticate = async (req, res, next) => {
     try {

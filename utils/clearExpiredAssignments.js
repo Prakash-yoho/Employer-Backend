@@ -1,4 +1,4 @@
-import Employee from "../model/Employer/Employee.js";
+import Employee from "../model/Employee.js";
 import Schedule from "../model/Schedule.js";
 
 /**

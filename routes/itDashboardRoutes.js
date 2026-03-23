@@ -1,6 +1,6 @@
 import express from 'express';
-import { authenticate, authorize } from '../../middleware/Employer/authMiddleware.js';
-import { getComprehensiveITDashboard } from '../../controllers/Employer/itDashboardController.js';
+import { authenticate, authorize } from '../middleware/authMiddleware.js';
+import { getComprehensiveITDashboard } from '../controllers/Employer/itDashboardController.js';
 
 const router = express.Router();
 

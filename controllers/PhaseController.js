@@ -1,6 +1,6 @@
 import Phase from "../model/Phase.js";
 import Schedule from "../model/Schedule.js";
-import Employee from "../model/Employer/Employee.js";
+import Employee from "../model/Employee.js";
 import ActivityLogPhaseSchedule from "../model/ActivityLogPhaseSchedule.js";
 import { createPhaseValidation, updatePhaseValidation } from "../validations/PhaseValidation.js";
 

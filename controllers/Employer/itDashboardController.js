@@ -1,5 +1,5 @@
-import Ticket from '../../model/Employer/Ticket.js';
-import Asset from '../../model/Employer/Asset.js';
+import Ticket from '../../model/Ticket.js';
+import Asset from '../../model/Asset.js';
 
 // Get comprehensive IT dashboard data (all in one)
 export const getComprehensiveITDashboard = async (req, res) => {

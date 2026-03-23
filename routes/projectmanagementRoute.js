@@ -2,7 +2,7 @@ import express from "express";
 import { createProject, softDeleteProject, getAllProjects, getProjectById, updateProject, hardDeleteProject, restoreProject } from "../controllers/projectController.js";
 import { createTeam, softDeleteTeam, getAllTeams, getTeamById, getTeamsByTL, updateTeam, hardDeleteTeam, restoreTeam, getUnassignedEmployees } from "../controllers/teamController.js";
 import { assignTL, getAllTLs, getMyTLDashboard, getTLById, removeTL } from "../controllers/tlController.js";
-import { authenticate, authenticateEmployee, authorize } from "../middleware/Employer/authMiddleware.js";
+import { authenticate, authenticateEmployee, authorize } from "../middleware/authMiddleware.js";
 import {
     createTask,
     updateTask,

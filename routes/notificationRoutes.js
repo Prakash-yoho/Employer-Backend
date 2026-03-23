@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate, authenticateEmployee, authorize } from '../../middleware/Employer/authMiddleware.js';
+import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 import {
     getMyNotifications,
     markNotificationAsRead,
@@ -7,7 +7,7 @@ import {
     deleteNotification,
     getUnreadCount,
     getNotificationStatistics
-} from '../../controllers/Employer/notificationController.js';
+} from '../controllers/Employer/notificationController.js';
 
 const router = express.Router();
 

@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { createEmployerUserSchema, updateEmployerUserSchema } from '../../validations/Employer/employerUserValidation.js';
-import EmployerUser from '../../model/Employer/EmployerUser.js';
+import EmployerUser from '../../model/EmployerUser.js';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import BlacklistedToken from '../../model/BlacklistedToken.js';

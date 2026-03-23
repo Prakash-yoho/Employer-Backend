@@ -1,5 +1,5 @@
-import Notification from '../../model/Notification.js';
-import NotificationService from '../../services/notificationService.js';
+import Notification from '../model/Notification.js';
+import NotificationService from '../services/notificationService.js';
 
 // Get notifications for current user
 export const getMyNotifications = async (req, res) => {

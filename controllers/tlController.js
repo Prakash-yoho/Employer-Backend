@@ -1,6 +1,6 @@
 // controllers/tlController.js
 
-import Employee from "../model/Employer/Employee.js";
+import Employee from "../model/Employee.js";
 import Team from "../model/Team.js";
 import { assignTLValidator, removeTLValidator } from "../validations/projectmanagementValidation.js";
 

@@ -8,8 +8,8 @@ import {
     forwardToITSupport,
     resolveTicketAsIT,
     getTicketStatistics
-} from '../../controllers/Employer/ticketController.js';
-import { authenticate, authenticateEmployee, authorize } from '../../middleware/Employer/authMiddleware.js';
+} from '../controllers/Employer/ticketController.js';
+import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 

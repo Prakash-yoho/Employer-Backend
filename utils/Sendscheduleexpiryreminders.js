@@ -1,6 +1,6 @@
 import Schedule from "../model/Schedule.js";
-import Notification from "../model/Employer/Notification.js";
-import EmployerUser from "../model/Employer/EmployerUser.js";
+import Notification from "../model/Notification.js";
+import EmployerUser from "../model/EmployerUser.js";
 
 /**
  * Cron Job: Schedule Expiry Reminder (Schedule-level)

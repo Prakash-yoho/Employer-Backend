@@ -1,7 +1,7 @@
 // controllers/teamController.js
 import mongoose from "mongoose";
 import { createTeamValidator, updateTeamValidator } from "../validations/projectmanagementValidation.js";
-import Employee from "../model/Employer/Employee.js";
+import Employee from "../model/Employee.js";
 import Projects from "../model/Projects.js";
 import Team from "../model/Team.js";
 

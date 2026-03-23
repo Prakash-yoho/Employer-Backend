@@ -9,8 +9,8 @@ import {
     getMyAssets,
     getAssetStatistics,
     HardDeleteAsset
-} from '../../controllers/Employer/assetController.js';
-import { authenticate, authenticateEmployee, authorize } from '../../middleware/Employer/authMiddleware.js';
+} from '../controllers/Employer/assetController.js';
+import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 

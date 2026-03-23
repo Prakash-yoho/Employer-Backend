@@ -1,7 +1,7 @@
 import express from 'express';
-import upload, { handleDocumentUploadError } from '../../config/documentMulter.js'
-import { addExperienceCompany, deleteDocument, deleteExperience, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewDocument, uploadDocument, verifyDocument } from '../../controllers/Employer/documentController.js';
-import { authenticate, authenticateEmployee, authorize } from '../../middleware/Employer/authMiddleware.js';
+import upload, { handleDocumentUploadError } from '../config/documentMulter.js'
+import { addExperienceCompany, deleteDocument, deleteExperience, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewDocument, uploadDocument, verifyDocument } from '../controllers/Employer/documentController.js';
+import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 

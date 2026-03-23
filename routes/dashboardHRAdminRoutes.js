@@ -3,8 +3,8 @@ import {
     getDashboardStats,
     getOnboardingProgress,
     getRecentActivity
-} from '../../controllers/Employer/dashboardHRAdminController.js';
-import { authenticate, authorize } from '../../middleware/Employer/authMiddleware.js';
+} from '../controllers/Employer/dashboardHRAdminController.js';
+import { authenticate, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 

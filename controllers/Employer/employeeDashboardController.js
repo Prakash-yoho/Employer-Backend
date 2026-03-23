@@ -1,8 +1,8 @@
-import Employee from '../../model/Employer/Employee.js';
-import Document from '../../model/Employer/Document.js';
-import Asset from '../../model/Employer/Asset.js';
-import Ticket from '../../model/Employer/Ticket.js';
-import Notification from '../../model/Employer/Notification.js';
+import Employee from '../../model/Employee.js';
+import Document from '../../model/Document.js';
+import Asset from '../../model/Asset.js';
+import Ticket from '../../model/Ticket.js';
+import Notification from '../../model/Notification.js';
 
 // Dashboard for Employee
 export const getEmployeeDashboard = async (req, res) => {

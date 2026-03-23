@@ -1,9 +1,9 @@
 
 import mongoose from "mongoose";
-import Projects from "../model/Projects.js";
-import Team from "../model/Team.js";
-import Employee from "../model/Employee.js";
-import { createProjectValidator, updateProjectValidator } from "../validations/projectmanagementValidation.js";
+import Projects from "../../model/Projects.js";
+import Team from "../../model/Team.js";
+import Employee from "../../model/Employee.js";
+import { createProjectValidator, updateProjectValidator } from "../../validations/projectmanagementValidation.js";
 
 // ── CREATE PROJECT ────────────────────────────────────────────────────────────
 export const createProject = async (req, res) => {

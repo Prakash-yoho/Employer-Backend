@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
-import Asset from '../../model/Employer/Asset.js';
-import Employee from '../../model/Employer/Employee.js';
+import Asset from '../../model/Asset.js';
+import Employee from '../../model/Employee.js';
 import NotificationService from '../../services/notificationService.js';
 import {
     createAssetSchema,

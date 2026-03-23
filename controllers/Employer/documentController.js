@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import Employee from '../../model/Employer/Employee.js';
-import Document from '../../model/Employer/Document.js';
+import Employee from '../../model/Employee.js';
+import Document from '../../model/Document.js';
 import { addExperienceCompanySchema, getDocumentsQuerySchema, uploadDocumentSchema, verifyDocumentSchema } from '../../validations/Employer/documentValidation.js';
 import { deleteDocumentFromS3, uploadDocumentToS3 } from '../../utils/saveOfferLetterInS3.js';
-import EmployerUser from '../../model/Employer/EmployerUser.js';
+import EmployerUser from '../../model/EmployerUser.js';
 import NotificationService from '../../services/notificationService.js';
 import { s3, S3_BUCKET } from '../../config/s3.js';
 import { GetObjectCommand } from '@aws-sdk/client-s3';

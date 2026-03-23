@@ -5,7 +5,7 @@ import {
     updateTaskStatusValidator,
     updateTaskValidator,
 } from "../validations/projectmanagementValidation.js";
-import Employee from "../model/Employer/Employee.js";
+import Employee from "../model/Employee.js";
 import Team from "../model/Team.js";
 import ExcelJS from "exceljs"
 import Task from "../model/Task.js";
