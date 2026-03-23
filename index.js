@@ -1,13 +1,13 @@
 import express from 'express'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
-import jobRoutes from './routes/jobRoutes.js'
-import userRoutes from './routes/userRoutes.js'
-import otpRoutes from './routes/otpRoutes.js'
-import applicationRoutes from './routes/applicationRoutes.js'
-import dashboardRoutes from './routes/dashboardRoutes.js'
-import adminRoutes from './routes/adminRoutes.js'
-import resumeRoutes from './routes/resumeRoutes.js'
+// import jobRoutes from './routes/jobRoutes.js'
+// import userRoutes from './routes/userRoutes.js'
+// import otpRoutes from './routes/otpRoutes.js'
+// import applicationRoutes from './routes/applicationRoutes.js'
+// import dashboardRoutes from './routes/dashboardRoutes.js'
+// import adminRoutes from './routes/adminRoutes.js'
+// import resumeRoutes from './routes/resumeRoutes.js'
 import employerRoutes from './routes/Employer/employerUserRoutes.js'
 import employeeRoutes from './routes/Employer/employeeRoutes.js'
 import documentRoutes from './routes/Employer/documentRoutes.js'
@@ -55,13 +55,13 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Job portal Routes
-app.use("/api/jobs", jobRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/otp", otpRoutes);
-app.use("/api/applications", applicationRoutes);
-app.use("/api/dashboard", dashboardRoutes)
-app.use("/api/admin", adminRoutes);
-app.use("/api/resume", resumeRoutes);
+// app.use("/api/jobs", jobRoutes);
+// app.use("/api/users", userRoutes);
+// app.use("/api/otp", otpRoutes);
+// app.use("/api/applications", applicationRoutes);
+// app.use("/api/dashboard", dashboardRoutes)
+// app.use("/api/admin", adminRoutes);
+// app.use("/api/resume", resumeRoutes);
 
 // Employer Routes
 app.use("/api/employer", employerRoutes);
