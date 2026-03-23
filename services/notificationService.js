@@ -11,6 +11,7 @@ class NotificationService {
 
     // Employee Related
     static async createEmployeeCreatedNotification(employee, createdBy) {
+        console.log(createdBy)
         return await Notification.createNotification({
             title: 'New Employee Added',
             description: `New employee ${employee.firstName} ${employee.lastName} has been added to the system.`,
