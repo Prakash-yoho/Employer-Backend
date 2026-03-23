@@ -3,7 +3,7 @@ import {
     getEmployeeDashboard,
     getEmployerDashboard,
     getAdminOverview
-} from '../controllers/Employer/employeeDashboardController.js';
+} from '../controllers/employeeDashboardController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();

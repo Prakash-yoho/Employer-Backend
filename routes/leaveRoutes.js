@@ -10,7 +10,7 @@ import {
     getLeaveBalance,
     cancelLeaveRequest,
     getUpcomingLeaves
-} from '../controllers/Employer/leaveController.js';
+} from '../controllers/leaveController.js';
 
 const router = express.Router();
 

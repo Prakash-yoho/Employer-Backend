@@ -1,15 +1,15 @@
-import Ticket from '../../model/Ticket.js';
-import Employee from '../../model/Employee.js';
+import Ticket from '../model/Ticket.js';
+import Employee from '../model/Employee.js';
 import {
     createTicketSchema,
     updateTicketSchema,
     resolveTicketSchema,
     forwardToITSchema,
     getTicketsQuerySchema
-} from '../../validations/Employer/ticketValidation.js';
-import EmployerUser from '../../model/EmployerUser.js';
-import NotificationService from '../../services/notificationService.js';
-import Notification from '../../model/Notification.js';
+} from '../validations/ticketValidation.js';
+import EmployerUser from '../model/EmployerUser.js';
+import NotificationService from '../services/notificationService.js';
+import Notification from '../model/Notification.js';
 
 // Create new ticket (Employee only)
 export const createTicket = async (req, res) => {

@@ -1,6 +1,6 @@
-import Employee from '../../model/Employee.js';
-import Document from '../../model/Document.js';
-import Ticket from '../../model/Ticket.js';
+import Employee from '../model/Employee.js';
+import Document from '../model/Document.js';
+import Ticket from '../model/Ticket.js';
 
 // Get HR/Admin Dashboard Statistics
 export const getDashboardStats = async (req, res) => {

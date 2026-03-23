@@ -1,13 +1,13 @@
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
-import { createEmployerUserSchema, updateEmployerUserSchema } from '../../validations/Employer/employerUserValidation.js';
-import EmployerUser from '../../model/EmployerUser.js';
+import { createEmployerUserSchema, updateEmployerUserSchema } from '../validations/employerUserValidation.js';
+import EmployerUser from '../model/EmployerUser.js';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
-import BlacklistedToken from '../../model/BlacklistedToken.js';
+import BlacklistedToken from '../model/BlacklistedToken.js';
 import Joi from 'joi';
-import { sendMail } from '../../utils/mailer.js';
-import { newAdminUserTemplate } from '../../utils/Employer/emailTemplates.js';
+import { sendMail } from '../utils/mailer.js';
+import { newAdminUserTemplate } from '../utils/Employer/emailTemplates.js';
 
 dotenv.config();
 

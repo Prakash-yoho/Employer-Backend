@@ -1,14 +1,14 @@
 import mongoose from 'mongoose';
-import Asset from '../../model/Asset.js';
-import Employee from '../../model/Employee.js';
-import NotificationService from '../../services/notificationService.js';
+import Asset from '../model/Asset.js';
+import Employee from '../model/Employee.js';
+import NotificationService from '../services/notificationService.js';
 import {
     createAssetSchema,
     updateAssetSchema,
     assignAssetSchema,
     removeAssignmentSchema,
     getAssetsQuerySchema
-} from '../../validations/Employer/assetValidation.js';
+} from '../validations/assetValidation.js';
 
 // Create new asset (IT only)
 export const createAsset = async (req, res) => {

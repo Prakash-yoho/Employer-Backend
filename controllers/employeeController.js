@@ -2,15 +2,15 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import { createEmployeeSchema, employeeChangePasswordSchema, employeeLoginSchema, employeeUpdateRequestSchema, updateEmployeeByAdminSchema, updateEmployeeProfileSchema } from '../../validations/Employer/employeeValidation.js';
-import Employee from '../../model/Employee.js';
-import BlacklistedToken from '../../model/BlacklistedToken.js';
-import { deleteImageFromS3, uploadImageToS3 } from '../../utils/saveOfferLetterInS3.js';
-import NotificationService from '../../services/notificationService.js';
-import EmployerUser from '../../model/EmployerUser.js';
-import Notification from '../../model/Notification.js';
-import { sendMail } from '../../utils/mailer.js';
-import { newEmployeeTemplate } from '../../utils/Employer/emailTemplates.js';
+import { createEmployeeSchema, employeeChangePasswordSchema, employeeLoginSchema, employeeUpdateRequestSchema, updateEmployeeByAdminSchema, updateEmployeeProfileSchema } from '../validations/employeeValidation.js';
+import Employee from '../model/Employee.js';
+import BlacklistedToken from '../model/BlacklistedToken.js';
+import { deleteImageFromS3, uploadImageToS3 } from '../utils/saveOfferLetterInS3.js';
+import NotificationService from '../services/notificationService.js';
+import EmployerUser from '../model/EmployerUser.js';
+import Notification from '../model/Notification.js';
+import { sendMail } from '../utils/mailer.js';
+import { newEmployeeTemplate } from '../utils/Employer/emailTemplates.js';
 dotenv.config();
 
 // Generate JWT token

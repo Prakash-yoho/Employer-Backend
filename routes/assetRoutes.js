@@ -9,7 +9,7 @@ import {
     getMyAssets,
     getAssetStatistics,
     HardDeleteAsset
-} from '../controllers/Employer/assetController.js';
+} from '../controllers/assetController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();

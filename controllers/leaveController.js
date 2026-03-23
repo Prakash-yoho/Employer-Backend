@@ -1,7 +1,7 @@
-import Leave from '../../model/Leave.js';
-import Employee from '../../model/Employee.js';
-import EmployerUser from '../../model/EmployerUser.js';
-import Notification from '../../model/Notification.js';
+import Leave from '../model/Leave.js';
+import Employee from '../model/Employee.js';
+import EmployerUser from '../model/EmployerUser.js';
+import Notification from '../model/Notification.js';
 import mongoose from 'mongoose';
 
 // Import Joi validation schemas
@@ -11,9 +11,9 @@ import {
     getLeavesQueryValidation,
     leaveStatsValidation,
     leaveBalanceValidation
-} from '../../validations/Employer/leaveValidation.js';
-import { sendMail } from '../../utils/mailer.js';
-import { leaveEmailTemplate } from '../../utils/Employer/emailTemplates.js';
+} from '../validations/leaveValidation.js';
+import { sendMail } from '../utils/mailer.js';
+import { leaveEmailTemplate } from '../utils/Employer/emailTemplates.js';
 
 // Helper function for validation
 const validateRequest = (schema, data) => {
