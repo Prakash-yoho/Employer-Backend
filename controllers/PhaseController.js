@@ -134,7 +134,10 @@ export const getAllPhasesWithSchedules = async (req, res) => {
 
         const formatDate = (date) =>
             new Date(date).toLocaleDateString("en-GB", {
-                day: "2-digit", month: "short", year: "numeric",
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+                timeZone: "UTC",
             }).replace(/ /g, "-");
 
         // ── 1. Phases ─────────────────────────────────────────────────────────
@@ -208,7 +211,7 @@ export const getAllPhasesWithSchedules = async (req, res) => {
 
             const currentSchedule = phaseSchedules.find((s) => {
                 const from = new Date(s.fromDate); from.setHours(0, 0, 0, 0);
-                const to = new Date(s.toDate); to.setHours(23, 59, 59, 999);
+                const to = new Date(s.toDate); to.setHours(0, 0, 0, 0);
                 return today >= from && today <= to;
             }) || null;
 
