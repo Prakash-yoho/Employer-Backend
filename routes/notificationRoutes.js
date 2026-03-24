@@ -46,28 +46,28 @@ router.delete(
 router.get(
     '/',
     authenticate,
-    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', "PROJECT_MANAGER"]),
+   authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', 'PROJECT_MANAGER']),
     getMyNotifications
 );
 
 router.get(
     '/unread-count',
     authenticate,
-    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', "PROJECT_MANAGER"]),
+   authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', 'PROJECT_MANAGER']),
     getUnreadCount
 );
 
 router.patch(
     '/employer/:notificationId/read',
     authenticate,
-    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', "PROJECT_MANAGER"]),
+   authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', 'PROJECT_MANAGER']),
     markNotificationAsRead
 );
 
 router.patch(
     '/employer/read-all',
     authenticate,
-    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', "PROJECT_MANAGER"]),
+   authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT', 'PROJECT_MANAGER']),
     markAllNotificationsAsRead
 );
 

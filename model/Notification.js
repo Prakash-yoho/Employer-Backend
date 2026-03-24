@@ -194,14 +194,61 @@ notificationSchema.statics.createNotification = async function (data) {
 };
 
 // Static method to get notifications for user
+// notificationSchema.statics.getNotificationsForUser = async function (userId, userType, options = {}) {
+//     const {
+//         limit = 50,
+//         skip = 0,
+//         status = null,
+//         type = null,
+//         read = null
+//     } = options;
+
+//     // Ensure userId is ObjectId
+//     let userIdObj;
+//     if (typeof userId === 'string') {
+//         userIdObj = new mongoose.Types.ObjectId(userId);
+//     } else if (userId && userId._id) {
+//         userIdObj = userId._id;
+//     } else {
+//         userIdObj = userId;
+//     }
+
+//     // Build query - SIMPLIFIED VERSION FIRST
+//     const query = {
+//         $or: [
+//             {
+//                 recipientType: userType,
+//                 recipientId: userIdObj
+//             },
+//             {
+//                 recipientType: 'ALL'
+//             }
+//         ]
+//     };
+
+//     // Add optional filters
+//     if (status) {
+//         query.status = status;
+//     }
+//     if (type) {
+//         query.type = type;
+//     }
+//     if (read !== null) {
+//         query.status = read ? 'read' : 'unread';
+//     }
+
+//    const results = await this.find(query)
+//     .sort({ createdAt: -1, priority: -1 })
+//     .skip(skip)
+//     .limit(limit)
+//     .populate({ path: 'recipientId', select: 'firstName lastName email' })
+//     .populate({ path: 'senderId', select: 'firstName lastName email' })
+//     .populate({ path: 'relatedEntityId' });
+
+//     return results;
+// };
 notificationSchema.statics.getNotificationsForUser = async function (userId, userType, options = {}) {
-    const {
-        limit = 50,
-        skip = 0,
-        status = null,
-        type = null,
-        read = null
-    } = options;
+    const { limit = 50, skip = 0, status = null, type = null, read = null } = options;
 
     // Ensure userId is ObjectId
     let userIdObj;
@@ -213,39 +260,57 @@ notificationSchema.statics.getNotificationsForUser = async function (userId, use
         userIdObj = userId;
     }
 
-    // Build query - SIMPLIFIED VERSION FIRST
+    // Build query
     const query = {
         $or: [
-            {
-                recipientType: userType,
-                recipientId: userIdObj
-            },
-            {
-                recipientType: 'ALL'
-            }
+            { recipientType: userType, recipientId: userIdObj },
+            { recipientType: 'ALL' }
         ]
     };
+    if (status) query.status = status;
+    if (type) query.type = type;
+    if (read !== null) query.status = read ? 'read' : 'unread';
 
-    // Add optional filters
-    if (status) {
-        query.status = status;
-    }
-    if (type) {
-        query.type = type;
-    }
-    if (read !== null) {
-        query.status = read ? 'read' : 'unread';
-    }
-
-    const results = await this.find(query)
+    // Fetch notifications as plain objects (with basic populations)
+    const notifications = await this.find(query)
         .sort({ createdAt: -1, priority: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('recipientId', 'firstName lastName email')
-        .populate('senderId', 'firstName lastName email')
-        .populate('relatedEntityId');
+        .populate({ path: 'recipientId', select: 'firstName lastName email' })
+        .populate({ path: 'relatedEntityId' })
+        .lean();  // ← use .lean() to get plain objects
 
-    return results;
+    // ----- Batch populate senderId based on senderModel -----
+    const sendersByModel = {};
+    for (const notif of notifications) {
+        // Only populate if there is a senderId, a senderModel, and it's not "System"
+        if (notif.senderId && notif.senderModel && notif.senderModel !== 'System') {
+            if (!sendersByModel[notif.senderModel]) sendersByModel[notif.senderModel] = [];
+            sendersByModel[notif.senderModel].push(notif.senderId);
+        }
+    }
+
+    // Fetch all senders per model (one query per model type)
+    const populatedSenders = {};
+    for (const [modelName, ids] of Object.entries(sendersByModel)) {
+        const Model = mongoose.model(modelName);
+        const senders = await Model.find({ _id: { $in: ids } }).select('firstName lastName email').lean();
+        populatedSenders[modelName] = senders.reduce((acc, s) => {
+            acc[s._id.toString()] = s;
+            return acc;
+        }, {});
+    }
+
+    // Replace senderId with the populated document (or leave as original if not found)
+    for (const notif of notifications) {
+        if (notif.senderId && notif.senderModel && notif.senderModel !== 'System') {
+            const populated = populatedSenders[notif.senderModel]?.[notif.senderId.toString()];
+            if (populated) notif.senderId = populated;
+            // Otherwise keep the ObjectId (sender may have been deleted)
+        }
+    }
+
+    return notifications;
 };
 
 // Static method to get unread count
