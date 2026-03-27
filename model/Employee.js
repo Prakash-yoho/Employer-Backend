@@ -361,8 +361,12 @@ const employeeSchema = new Schema({
             },
             message: 'Profile image must be a JPG, JPEG, or PNG file'
         }
+    }, appointmentLetters: {
+        url: { type: String },
+        fileName: { type: String },
+        isVerified: { type: Boolean, default: false }, // ✅ important
+        uploadedAt: { type: Date, default: Date.now }
     },
-
     profileImageKey: {
         type: String,
         default: null

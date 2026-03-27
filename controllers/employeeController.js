@@ -9,8 +9,10 @@ import { deleteImageFromS3, uploadImageToS3 } from '../utils/saveOfferLetterInS3
 import NotificationService from '../services/notificationService.js';
 import EmployerUser from '../model/EmployerUser.js';
 import Notification from '../model/Notification.js';
-import { sendMail } from '../utils/mailer.js';
+import { sendAppointmentEmail, sendMail } from '../utils/mailer.js';
 import { newEmployeeTemplate } from '../utils/Employer/emailTemplates.js';
+import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
+import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 dotenv.config();
 
 // Generate JWT token
@@ -1308,3 +1310,147 @@ export const deleteEmployeeImageByAdmin = async (req, res) => {
     }
 };
 
+
+export const sendAppointmentLetter = async (req, res) => {
+  try {
+    const { employeeId } = req.body;
+
+    const employee = await Employee.findOne({ employeeId });
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    // ✅ 1️⃣ Check if appointment letter already exists (object check)
+    if (employee.appointmentLetters && employee.appointmentLetters.url) {
+      return res.status(200).json({
+        success: true,
+        message: "Appointment letter was already sent previously",
+        data: {
+          employeeId: employee._id,
+          appointmentLetter: employee.appointmentLetters,
+          emailSent: true,
+        },
+      });
+    }
+
+    // ✅ 2️⃣ Prepare data for PDF
+    const formattedEmployee = {
+      ...employee.toObject(),
+      user: {
+        fullName: `${employee.firstName} ${employee.lastName}`,
+        fullNameS3: `${employee.firstName}${employee.lastName}`,
+      },
+      joiningDate: employee.createdAt,
+    };
+
+    // ✅ 3️⃣ Generate PDF
+    let pdfBuffer;
+    try {
+      pdfBuffer = await generateAppointmentLetter(formattedEmployee);
+    } catch (err) {
+      console.error("PDF Error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to generate appointment letter",
+      });
+    }
+
+    // ✅ 4️⃣ Upload to S3
+    let appointmentUrl;
+    try {
+      appointmentUrl = await saveAppointmentLetterInS3(
+        pdfBuffer,
+        formattedEmployee.user.fullNameS3
+      );
+
+      // ✅ Save as OBJECT (not array)
+      employee.appointmentLetters = {
+        url: appointmentUrl,
+        fileName: `${formattedEmployee.user.fullNameS3}_AppointmentLetter_Kiaq.pdf`,
+        uploadedAt: new Date(),
+      };
+
+      await employee.save();
+
+    } catch (uploadError) {
+      console.error("S3 Upload Error:", uploadError);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to upload appointment letter",
+      });
+    }
+
+    // ✅ 5️⃣ Send Email
+    let emailSent = false;
+    try {
+      await sendAppointmentEmail(employee, pdfBuffer);
+      emailSent = true;
+    } catch (emailError) {
+      console.log("Email failed:", emailError);
+    }
+
+    // ✅ 6️⃣ Response
+    res.status(200).json({
+      success: true,
+      message:
+        "Appointment letter sent successfully" +
+        (emailSent ? " with email" : " (email pending/failed)"),
+      data: {
+        employeeId: employee._id,
+        appointmentLetter: employee.appointmentLetters,
+        emailSent,
+      },
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+export const verifyAppointmentLetter = async (req, res) => {
+  try {
+    const { employeeId } = req.body;
+
+    const employee = await Employee.findOne({ employeeId });
+
+    if (!employee || !employee.appointmentLetters?.url) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment letter not found",
+      });
+    }
+
+    // ✅ Already signed check
+    if (employee.appointmentLetters.isVerified) {
+      return res.status(200).json({
+        success: true,
+        message: "Already signed",
+        data: employee.appointmentLetters,
+      });
+    }
+
+    // ✅ Mark as signed
+    employee.appointmentLetters.isVerified = true;
+    await employee.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Appointment letter signed successfully",
+      data: employee.appointmentLetters,
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};

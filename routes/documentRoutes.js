@@ -1,6 +1,6 @@
 import express from 'express';
 import upload, { handleDocumentUploadError } from '../config/documentMulter.js'
-import { addExperienceCompany, deleteDocument, deleteExperience, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewDocument, uploadDocument, verifyDocument } from '../controllers/documentController.js';
+import { addExperienceCompany, deleteDocument, deleteExperience, downloadAppointmentLetter, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewAppointmentLetter, previewDocument, uploadDocument, verifyDocument } from '../controllers/documentController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -84,6 +84,11 @@ router.get(
     authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
     downloadDocument
 );
+
+
+
+router.get("/preview-appointment-letter", authenticateEmployee, previewAppointmentLetter);
+router.get("/download-appointment-letter", authenticateEmployee, downloadAppointmentLetter);
 
 
 export default router;

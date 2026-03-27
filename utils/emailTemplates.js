@@ -214,6 +214,86 @@ export const offerLetterEmailTemplate = (candidate, application) => {
 };
 
 
+export const appointmentLetterEmailTemplate = (employee) => {
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+      <meta charset="UTF-8" />
+      <style>
+          body {
+              font-family: Arial, Helvetica, sans-serif;
+              background: #ffffff;
+              margin: 0;
+              padding: 0;
+              color: #111111;
+          }
+          .container {
+              max-width: 620px;
+              margin: 0 auto;
+              padding: 20px;
+          }
+          p {
+              font-size: 15px;
+              line-height: 1.6;
+              margin: 12px 0;
+          }
+          h2 {
+              font-size: 18px;
+              margin-bottom: 10px;
+          }
+          ul {
+              margin: 10px 0 20px 20px;
+          }
+          .footer-text {
+              font-size: 12px;
+              color: #555555;
+              margin-top: 30px;
+              text-align: left;
+          }
+      </style>
+  </head>
+
+  <body>
+      <div class="container">
+
+          <p>Dear <strong>${employee.firstName} ${employee.lastName}</strong>,</p>
+
+          <p>We are delighted to officially welcome you to <strong>${process.env.COMPANY_NAME}</strong>.</p>
+
+          <p>Your <strong>Appointment Letter</strong> has been issued and is attached to this email.</p>
+
+          <h2>Employee Details</h2>
+          <p><strong>Employee ID:</strong> ${employee.employeeId}</p>
+          <p><strong>Designation:</strong> ${employee.designation}</p>
+          <p><strong>Department:</strong> ${employee.department}</p>
+
+          <h2>Steps to Accept Your Appointment Letter</h2>
+          <p>Please follow the steps below to acknowledge your appointment letter in the portal:</p>
+          <ul>
+              <li>Log in to the company portal using your credentials.</li>
+              <li>Navigate to the <strong>Company Policies</strong> tab.</li>
+              <li>Click on <strong>Appointment Letter</strong> to view the document.</li>
+              <li>Review the details carefully and click <strong>Accept and Sign</strong> to acknowledge.</li>
+          </ul>
+
+          <p>We look forward to your valuable contribution and wish you a successful career with us.</p>
+
+          <p>Best Regards,<br />
+          <strong>${process.env.COMPANY_NAME}</strong>
+          </p>
+
+          <p class="footer-text">
+              This is an automated email. Please do not reply to this message.
+          </p>
+
+      </div>
+  </body>
+  </html>
+  `;
+};
+
+
 export const offerStatusUpdateTemplate = (candidate, application, status) => {
   const statusMessages = {
     "offer accepted": {

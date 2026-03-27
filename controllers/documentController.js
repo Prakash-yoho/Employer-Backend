@@ -1280,3 +1280,136 @@ export const downloadDocument = async (req, res) => {
         });
     }
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Appointment Letters 
+
+
+
+export const previewAppointmentLetter = async (req, res) => {
+  try {
+    // ✅ Always use logged-in user
+    const employeeId = req.user._id;
+
+    const employee = await Employee.findById(employeeId);
+
+    if (!employee || !employee.appointmentLetters?.url) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment letter not found",
+      });
+    }
+
+    let fileUrl = employee.appointmentLetters.url;
+
+    // Extract S3 key
+    let s3Key = fileUrl.split(".amazonaws.com/")[1];
+
+    if (s3Key.includes("?")) {
+      s3Key = s3Key.split("?")[0];
+    }
+
+    const command = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+      ResponseContentDisposition: `inline; filename="${employee.appointmentLetters.fileName}"`,
+      ResponseContentType: "application/pdf",
+    });
+
+    const signedUrl = await getSignedUrl(s3, command, {
+      expiresIn: 60 * 5, // 5 mins
+    });
+
+    return res.status(200).json({
+      success: true,
+      fileUrl: signedUrl,
+      expiresIn: 300,
+    });
+
+  } catch (error) {
+    console.error("Preview appointment letter error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error previewing appointment letter",
+    });
+  }
+};
+
+
+
+// const streamPipeline = promisify(pipeline);
+
+export const downloadAppointmentLetter = async (req, res) => {
+  try {
+    // ✅ Logged-in employee only
+    const employeeId = req.user._id;
+
+    const employee = await Employee.findById(employeeId);
+
+    if (!employee || !employee.appointmentLetters?.url) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment letter not found",
+      });
+    }
+
+    let fileUrl = employee.appointmentLetters.url;
+
+    // Extract S3 key
+    let s3Key = fileUrl.split(".amazonaws.com/")[1];
+
+    if (s3Key.includes("?")) {
+      s3Key = s3Key.split("?")[0];
+    }
+
+    const command = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+    });
+
+    const file = await s3.send(command);
+
+    if (!file.Body) {
+      return res.status(404).json({
+        success: false,
+        message: "File not found in storage",
+      });
+    }
+
+    // Force download
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${employee.appointmentLetters.fileName}"`
+    );
+
+    await streamPipeline(file.Body, res);
+
+  } catch (error) {
+    console.error("Download appointment letter error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error downloading appointment letter",
+    });
+  }
+};

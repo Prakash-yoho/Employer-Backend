@@ -24,7 +24,7 @@ import cors from 'cors'
 import cron from "node-cron"
 import { clearExpiredAssignments } from './utils/clearExpiredAssignments.js'
 import { sendScheduleExpiryReminders } from './utils/Sendscheduleexpiryreminders.js'
-
+import defaultDocsRoutes from './routes/defaultDocsRoutes.js'
 dotenv.config()
 
 connectDB()
@@ -62,6 +62,11 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // app.use("/api/dashboard", dashboardRoutes)
 // app.use("/api/admin", adminRoutes);
 // app.use("/api/resume", resumeRoutes);
+
+
+
+app.use("/public", express.static("public"));
+app.use("/api", defaultDocsRoutes);
 
 // Employer Routes
 app.use("/api/employer", employerRoutes);

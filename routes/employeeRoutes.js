@@ -1,5 +1,5 @@
 import express from 'express';
-import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage } from '../controllers/employeeController.js';
+import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 import upload, { handleMulterError } from '../config/imageMulter.js'
 
@@ -13,6 +13,12 @@ router.use('/profile', authenticateEmployee);
 
 router.get('/profile/me', getEmployeeProfile);
 router.put('/profile/me', updateEmployeeProfile);
+
+
+
+router.post('/profile/send-appointmentletter', sendAppointmentLetter);
+router.post('/profile/verify-appointment-letter', verifyAppointmentLetter);
+
 router.post('/profile/update-request', requestProfileUpdate);
 router.post('/profile/cancel-update-request', cancelUpdateRequest);
 // Upload/Update profile image

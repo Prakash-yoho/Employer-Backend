@@ -96,7 +96,7 @@ import dotenv from "dotenv";
 dotenv.config();
 import nodemailer from "nodemailer";
 import Mailjet from 'node-mailjet';
-import { offerLetterEmailTemplate, offerStatusUpdateTemplate } from "./emailTemplates.js";
+import { appointmentLetterEmailTemplate, offerLetterEmailTemplate, offerStatusUpdateTemplate } from "./emailTemplates.js";
 
 // Create SMTP transporter (Gmail)
 // const transporter = nodemailer.createTransport({
@@ -242,4 +242,41 @@ export const sendOfferStatusEmail = async (candidate, application, status) => {
         console.log("Offer Status Email Error:", error);
         return error;
     }
+};
+
+
+
+export const sendAppointmentEmail = async (employee, pdfBuffer) => {
+  try {
+    const htmlContent = appointmentLetterEmailTemplate(employee);
+
+    const subject = `LETTER OF APPOINTMENT - WELCOME TO ${process.env.COMPANY_NAME}`;
+
+    const attachment = [
+      {
+        ContentType: "application/pdf",
+        Filename: `${employee.firstName}_AppointmentLetter.pdf`,
+        Base64Content: pdfBuffer.toString("base64"),
+      }
+    ];
+
+    await SendMailJet({
+  to: employee.officialEmail,
+  subject: subject,
+  html: htmlContent,
+  attachments: [
+    {
+      ContentType: "application/pdf",
+      Filename: `${employee.firstName}_AppointmentLetter.pdf`,
+      Base64Content: pdfBuffer.toString("base64"),
+    }
+  ],
+});
+
+    // return result;
+
+  } catch (error) {
+    console.log("Appointment Email Error:", error);
+    return error;
+  }
 };
