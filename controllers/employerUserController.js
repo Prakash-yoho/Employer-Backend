@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import BlacklistedToken from '../model/BlacklistedToken.js';
 import Joi from 'joi';
 import { sendMail } from '../utils/mailer.js';
-import { newAdminUserTemplate } from '../utils/Employer/emailTemplates.js';
+import { newAdminUserTemplate } from '../utils/emailTemplates.js';
 
 dotenv.config();
 

@@ -1,99 +1,112 @@
 
-export const otpSendTemplate = (user, otp) => `
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#fdf3eb;padding:40px 0;font-family:Arial, sans-serif;">
-  <tr>
-    <td align="center">
-      <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.06);">
+export const newAdminUserTemplate = (adminUser, plainPassword, role) => {
+  const roleDisplay =
+    role === 'EMPLOYER_HR' ? 'HR' :
+    role === 'EMPLOYER_IT' ? 'IT Support' :
+    'Administrator';
 
-        <!-- Header -->
-        <tr>
-          <td style="background:#FC8019;padding:22px;text-align:center;color:#ffffff;font-size:22px;font-weight:bold;">
-            🔐 Email Verification OTP
-          </td>
-        </tr>
+  const portalName =
+    role === 'EMPLOYER_HR' ? 'HR Portal' :
+    role === 'EMPLOYER_IT' ? 'IT Support Portal' :
+    'Admin Portal';
 
-        <!-- Content -->
-        <tr>
-          <td style="padding:35px;">
-            <p style="font-size:17px;color:#111827;margin:0;">
-              Hello <strong>${user?.fullName}</strong>,
-            </p>
+  const portalUrl =
+    role === 'EMPLOYER_HR' ? process.env.FRONTEND_EMPLOYER_HR :
+    role === 'EMPLOYER_IT' ? process.env.FRONTEND_EMPLOYER_IT :
+    process.env.FRONTEND_EMPLOYER_ADMIN || process.env.FRONTEND_EMPLOYER_HR;
 
-            <p style="font-size:15px;color:#4b5563;margin:18px 0;">
-              Please use the verification code below to complete your email verification process on 
-              <strong>Job Portal</strong>.
-            </p>
+  const companyName = process.env.COMPANY_NAME || 'Company Name';
 
-            <!-- OTP Box -->
-            <div style="margin:30px 0;text-align:center;">
-              <p style="
-                display:inline-block;
-                background:#fff7f2;
-                padding:18px 30px;
-                font-size:30px;
-                font-weight:bold;
-                color:#FC8019;
-                border:2px dashed #FC8019;
-                border-radius:10px;
-                letter-spacing:6px;
-              ">
-                ${otp}
-              </p>
-            </div>
-
-            <p style="font-size:15px;color:#4b5563;margin-top:10px;">
-              ⚠️ This OTP is valid for <strong>3 minutes</strong>.
-            </p>
-
-            <p style="font-size:15px;color:#4b5563;margin-top:12px;">
-              If you did not request this code, please ignore this email.
-            </p>
-
-            <p style="font-size:16px;color:#111827;margin-top:30px;">
-              Regards,<br />
-              <strong>Job Portal</strong>
-            </p>
-          </td>
-        </tr>
-
-      </table>
-    </td>
-  </tr>
-</table>
-`;
-
-export const forgotPasswordOtpTemplate = (user, otp) => `
+  return `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <title>Account Access Details</title>
   <style>
     body {
-      font-family: Arial, Helvetica, sans-serif;
-      background: #ffffff;
-      padding: 0;
       margin: 0;
-      color: #111111;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #000000;
+      background-color: #ffffff;
+      line-height: 1.5;
     }
+
     .container {
-      max-width: 620px;
+      max-width: 600px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 24px;
     }
-    p {
-      font-size: 15px;
-      line-height: 1.6;
-      margin: 10px 0;
+
+    .header {
+      border-bottom: 1px solid #dddddd;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
     }
-    .otp-box {
-      font-size: 28px;
+
+    .header h1 {
+      font-size: 20px;
+      margin: 0;
       font-weight: bold;
-      letter-spacing: 6px;
-      text-align: center;
-      margin: 30px 0;
-      padding: 15px 0;
-      border: 1px solid #cccccc;
-      border-radius: 6px;
+    }
+
+    .content p {
+      font-size: 14px;
+      margin: 0 0 16px;
+    }
+
+    .section {
+      margin-top: 20px;
+    }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+
+    .credentials {
+      font-size: 14px;
+    }
+
+    .credentials div {
+      margin-bottom: 6px;
+    }
+
+    .button-wrapper {
+      margin: 24px 0;
+    }
+
+    .button {
+      display: inline-block;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: bold;
+      color: #ffffff;
+      background-color: #dfbf0e;
+      text-decoration: none;
+      border-radius: 3px;
+    }
+
+    .link {
+      font-size: 13px;
+      margin-top: 8px;
+      word-break: break-all;
+    }
+
+    .notice {
+      margin-top: 24px;
+      font-size: 13px;
+      color: #333333;
+    }
+
+    .footer {
+      margin-top: 32px;
+      padding-top: 12px;
+      border-top: 1px solid #dddddd;
+      font-size: 12px;
+      color: #666666;
     }
   </style>
 </head>
@@ -101,116 +114,254 @@ export const forgotPasswordOtpTemplate = (user, otp) => `
 <body>
   <div class="container">
 
-    <p>Dear <strong>${user?.fullName}</strong>,</p>
-
-    <p>
-      You recently initiated a request to reset the password for your account on the 
-      <strong>KIAQ Career Portal</strong>. To verify your identity and proceed with the password
-      reset, please use the One-Time Password (OTP) provided below.
-    </p>
-
-    <div class="otp-box">
-      ${otp}
+    <div class="header">
+      <h1>${companyName}</h1>
     </div>
 
-    <p>
-      This OTP is valid for 2 minutes. Please do not share this code with anyone.
-    </p>
+    <div class="content">
+      <p>
+        Dear ${adminUser?.firstName} ${adminUser?.lastName},
+      </p>
 
-    <p>
-      If you did not request a password reset, you may safely ignore this email. Your account will remain secure.
-    </p>
+      <p>
+        Your account has been created and you have been granted
+        <strong>${roleDisplay}</strong> access to the ${portalName}.
+      </p>
 
-    <p>
-      Regards,<br />
-      <strong>${process.env.COMPANY_NAME}</strong>
-    </p>
+      <div class="section">
+        <div class="section-title">Login Information</div>
+        <div class="credentials">
+          <div><strong>Email:</strong> ${adminUser.email}</div>
+          <div><strong>Password:</strong> ${plainPassword}</div>
+          <div><strong>Role:</strong> ${roleDisplay}</div>
+        </div>
+      </div>
 
-    <p style="font-size: 12px; color: #555; margin-top: 25px;">
-      This is an automated email. Please do not reply to this message.
-    </p>
+      <div class="section">
+  <div class="section-title">Portal Access</div>
+
+  <p style="font-size:14px; margin-bottom:14px;">
+    Click the button below to securely access the ${portalName}.
+  </p>
+
+  <div class="button-wrapper" style="margin: 16px 0;">
+    <a
+      href="${portalUrl || '#'}"
+      target="_blank"
+      class="button"
+      aria-label="Access ${portalName}"
+    >
+      Access ${portalName}
+    </a>
+  </div>
+
+
+  <p class="link" style="font-size:12px; color:#000000; word-break:break-all;">
+    ${portalUrl || 'Portal URL will be provided separately'}
+  </p>
+</div>
+
+
+      
+    </div>
+
+    <div class="footer">
+      <p>This is an automated message. Please do not reply.</p>
+      <p>&copy; ${new Date().getFullYear()} ${companyName}</p>
+    </div>
 
   </div>
 </body>
 </html>
 `;
+};
 
 
-export const offerLetterEmailTemplate = (candidate, application) => {
+export const newEmployeeTemplate = (employee, officialPassword) => {
+  const companyName = process.env.COMPANY_NAME || 'Company Name';
+  const portalUrl =
+    process.env.FRONTEND_EMPLOYER_EMPLOYEE || '#';
 
   return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <style>
-          body {
-              font-family: Arial, Helvetica, sans-serif;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              color: #111111;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              padding: 20px;
-          }
-          p {
-              line-height: 1.6;
-              font-size: 15px;
-          }
-          .details-section {
-              margin: 20px 0;
-              padding: 15px 0;
-              border-top: 1px solid #ddd;
-              border-bottom: 1px solid #ddd;
-          }
-          .detail-item {
-              margin: 8px 0;
-          }
-      </style>
-  </head>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Employee Account Information</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background-color: #ffffff;
+      color: #000000;
+      line-height: 1.5;
+    }
 
-  <body>
-      <div class="container">
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 24px;
+    }
 
-          <p>Dear <strong>${candidate.fullName}</strong>,</p>
+    .header {
+      border-bottom: 1px solid #dddddd;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
 
-          <p>
-            We are pleased to offer you the position of 
-            <strong>${application.job.title}</strong> at 
-            <strong>${process.env.COMPANY_NAME || "our organization"}</strong>.
-          </p>
+    .header h1 {
+      font-size: 20px;
+      margin: 0;
+      font-weight: bold;
+    }
 
-          <p>
-            Attached, you will find your official offer letter outlining the compensation
-            details, joining information, and other relevant terms.
-          </p>
+    .header p {
+      font-size: 14px;
+      margin: 6px 0 0;
+      color: #333333;
+    }
 
-          <p>
-            We are excited to welcome you to our team and look forward to your contributions 
-            as we continue to grow together. Your skills and experience will be a valuable 
-            addition to our organization.
-          </p>
+    .content p {
+      font-size: 14px;
+      margin: 0 0 14px;
+    }
 
-          <p>
-            Should you have any questions or need clarification, feel free to contact us at 
-            <strong>${process.env.COMPANY_EMAIL || "hr@kiaq.in"}</strong>.
-          </p>
+    .section {
+      margin-top: 22px;
+    }
 
-          <p>
-            Once again, welcome to ${process.env.COMPANY_NAME || "career@kiaq.in"}.  
-            We look forward to working with you.
-          </p>
+    .section-title {
+      font-size: 15px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
 
-          <p style="font-size: 12px; color: #555; margin-top: 20px;">
-              This is an automated email. Please do not reply to this message.
-          </p>
+    .details {
+      font-size: 14px;
+    }
 
+    .details div {
+      margin-bottom: 6px;
+    }
+
+    .credentials {
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid #dddddd;
+      font-size: 14px;
+    }
+
+    .credentials div {
+      margin-bottom: 8px;
+    }
+
+    .button-wrapper {
+      margin: 22px 0;
+    }
+
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: bold;
+      color: #ffffff;
+      background-color: #000000;
+      text-decoration: none;
+      border-radius: 3px;
+    }
+
+    .link {
+      font-size: 12px;
+      margin-top: 8px;
+      word-break: break-all;
+    }
+
+    .notice {
+      margin-top: 20px;
+      font-size: 13px;
+      color: #333333;
+    }
+
+    .footer {
+      margin-top: 32px;
+      padding-top: 12px;
+      border-top: 1px solid #dddddd;
+      font-size: 12px;
+      color: #666666;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+
+    <div class="header">
+      <h1>${companyName}</h1>
+      <p>Employee Account Information</p>
+    </div>
+
+    <div class="content">
+      <p>
+        Dear ${employee.firstName} ${employee.lastName},
+      </p>
+
+      <p>
+        Welcome to ${companyName}. Your employee account has been created.
+        Please find your details below.
+      </p>
+
+      <div class="section">
+        <div class="section-title">Employee Details</div>
+        <div class="details">
+          <div><strong>Name:</strong> ${employee.firstName} ${employee.lastName}</div>
+          <div><strong>Employee ID:</strong> ${employee.employeeId}</div>
+          <div><strong>Department:</strong> ${employee.department}</div>
+          <div><strong>Designation:</strong> ${employee.designation}</div>
+        </div>
       </div>
-  </body>
-  </html>
-  `;
+
+      <div class="section">
+        <div class="section-title">Login Credentials</div>
+        <div class="credentials">
+          <div><strong>Official Email:</strong> ${employee.officialEmail}</div>
+          <div><strong>Temporary Password:</strong> ${officialPassword}</div>
+        </div>
+      </div>
+
+
+      <div class="section">
+        <div class="section-title">Employee Portal Access</div>
+
+        <div class="button-wrapper">
+          <a href="${portalUrl}" class="button" target="_blank">
+            Access Employee Portal
+          </a>
+        </div>
+
+        <div class="link">
+          ${portalUrl}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Support</div>
+        <p>
+          If you have any questions, please contact the HR department at
+          ${process.env.COMPANY_EMAIL || 'hr@company.com'}.
+        </p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>This is an automated message. Please do not reply.</p>
+      <p>&copy; ${new Date().getFullYear()} ${companyName}</p>
+    </div>
+
+  </div>
+</body>
+</html>
+`;
 };
 
 
@@ -294,661 +445,162 @@ export const appointmentLetterEmailTemplate = (employee) => {
 };
 
 
-export const offerStatusUpdateTemplate = (candidate, application, status) => {
-  const statusMessages = {
-    "offer accepted": {
-      title: "Offer Accepted",
-      message: "We are pleased to confirm that you have accepted the offer."
-    },
-    "offer rejected": {
-      title: "Offer Declined",
-      message: "We acknowledge that you have declined the offer."
-    }
-  };
-
-  const data = statusMessages[status] || {
-    title: "Offer Status Updated",
-    message: "Your offer status has been updated."
-  };
-
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <meta charset="UTF-8" />
-      <style>
-          body {
-              font-family: Arial, Helvetica, sans-serif;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              color: #111111;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              padding: 20px;
-          }
-          p {
-              font-size: 15px;
-              line-height: 1.6;
-              margin: 12px 0;
-          }
-          .section-title {
-              font-size: 20px;
-              font-weight: bold;
-              margin-bottom: 20px;
-          }
-          .footer-text {
-              font-size: 12px;
-              color: #555555;
-              margin-top: 30px;
-              text-align: left;
-          }
-      </style>
-  </head>
-
-  <body>
-      <div class="container">
-
-          <p>Dear <strong>${candidate.fullName}</strong>,</p>
-
-          <p>${data.message}</p>
-
-          <p><strong>Position:</strong> ${application.job.title}</p>
-          <p><strong>Department:</strong> ${application.job.department}</p>
-
-          ${status === "offer accepted"
-      ? `<p>Our HR team will connect with you shortly regarding the onboarding process.</p>`
-      : ``
-    }
-
-          <p>Regards,<br />
-          <strong>${process.env.COMPANY_NAME}</strong>
-          </p>
-
-          <p class="footer-text">
-              This is an automated email. Please do not reply to this message.
-          </p>
-
-      </div>
-  </body>
-  </html>
-  `;
+const formatDate = (date) => {
+  if (!date) return '-';
+  return new Date(date).toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
 };
 
 
-export const newHrCreationEmailTemplate = (hrUser, plainPassword) => `
+
+export const leaveEmailTemplate = (type, data) => {
+    let subject, title, message, details, actionText, actionUrl;
+
+    console.log(type,data,"Email Template")
+
+    switch (type) {
+        case 'REQUEST_TO_HR':
+            subject = `New Leave Request - ${data.employeeName}`;
+            title = 'New Leave Request';
+            message = `${data.employeeName} has submitted a leave request`;
+            details = `
+                <p><strong>Employee:</strong> ${data.employeeName}</p>
+                <p><strong>Leave Type:</strong> ${data.leaveType}</p>
+                <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
+                <p><strong>Reason:</strong> ${data.reason}</p>
+            `;
+            actionText = 'Review Request';
+            actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leaves/${data.requestId}`;
+            break;
+
+        case 'APPROVED_TO_EMPLOYEE':
+            subject = `Leave Request Approved - ${data.requestId}`;
+            title = 'Leave Approved ✅';
+            message = 'Your leave request has been approved';
+            details = `
+                <p><strong>Request ID:</strong> ${data.requestId}</p>
+                <p><strong>Leave Type:</strong> ${data.leaveType}</p>
+                <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
+            `;
+            actionText = 'View Details';
+            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leaves/${data.requestId}`;
+            break;
+
+        case 'REJECTED_TO_EMPLOYEE':
+            subject = `Leave Request Update - ${data.requestId}`;
+            title = 'Leave Not Approved';
+            message = 'Your leave request requires attention';
+            details = `
+                <p><strong>Request ID:</strong> ${data.requestId}</p>
+                <p><strong>Leave Type:</strong> ${data.leaveType}</p>
+                <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
+                <p><strong>Reason:</strong> ${data.rejectedComments || 'Please contact HR'}</p>
+            `;
+            actionText = 'Apply Again';
+            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leaves/new`;
+            break;
+    }
+
+    return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
   <style>
     body {
-      font-family: Arial, Helvetica, sans-serif;
-      background: #ffffff;
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
       margin: 0;
-      padding: 0;
-      color: #111111;
-    }
-
-    .container {
-      max-width: 620px;
-      margin: 0 auto;
       padding: 20px;
-    }
-
-    p {
-      font-size: 15px;
+      color: #333;
       line-height: 1.6;
-      margin: 12px 0;
     }
-
-    .section-title {
-      font-size: 20px;
+    
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    
+    .header {
+      background: ${type === 'REQUEST_TO_HR' ? '#f59e0b' :
+            type === 'APPROVED_TO_EMPLOYEE' ? '#10b981' : '#ef4444'};
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
+    
+    .title {
+      font-size: 22px;
       font-weight: bold;
-      margin-bottom: 20px;
+      margin: 10px 0;
     }
-
-    .cred-item {
-      margin: 4px 0;
-      font-size: 15px;
+    
+    .content {
+      padding: 25px;
     }
-
-    .footer-text {
+    
+    .message-box {
+      background: #f8fafc;
+      padding: 20px;
+      border-radius: 6px;
+      margin: 15px 0;
+      border-left: 4px solid ${type === 'REQUEST_TO_HR' ? '#f59e0b' :
+            type === 'APPROVED_TO_EMPLOYEE' ? '#10b981' : '#ef4444'};
+    }
+    
+    .btn {
+      display: inline-block;
+      background: ${type === 'REQUEST_TO_HR' ? '#f59e0b' :
+            type === 'APPROVED_TO_EMPLOYEE' ? '#10b981' : '#ef4444'};
+      color: white;
+      padding: 12px 25px;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: bold;
+      margin: 15px 0;
+    }
+    
+    .footer {
+      text-align: center;
+      padding: 20px;
+      background: #1e293b;
+      color: #cbd5e1;
       font-size: 12px;
-      color: #555555;
-      margin-top: 30px;
     }
   </style>
 </head>
 
 <body>
   <div class="container">
-
-    <p>Dear <strong>${hrUser.fullName}</strong>,</p>
-
-    <p>
-      Your HR account has been successfully created for
-      <strong>${process.env.COMPANY_NAME || "Our Company"}</strong>.
-    </p>
-
-    <p>Please use the credentials below to access the HR portal:</p>
-
-    <p class="cred-item"><strong>Email:</strong> ${hrUser.email}</p>
-    <p class="cred-item"><strong>Password:</strong> ${plainPassword}</p>
-
-    <p style="margin-top: 20px;">
-      HR Portal: <a href="${process.env.FRONTEND_HR_URL || "#"}" target="_blank">
-        ${process.env.FRONTEND_HR_URL || "Login Link"}
-      </a>
-    </p>
-
-    <p class="footer-text">
-      This is an automated email. Please do not reply.
-    </p>
-
+    <div class="header">
+      <div class="title">${title}</div>
+      <div>${process.env.COMPANY_NAME || 'Leave Management'}</div>
+    </div>
+    
+    <div class="content">
+      <p>${message}</p>
+      
+      <div class="message-box">
+        ${details}
+      </div>
+      
+      <center>
+        <a href="${actionUrl}" class="btn" target="_blank">${actionText}</a>
+      </center>
+      
+      <p style="margin-top: 20px; font-size: 14px; color: #64748b;">
+        This is an automated message. Please do not reply.
+      </p>
+    </div>
   </div>
 </body>
 </html>
 `;
-
-
-export const interviewScheduledEmailTemplate = (candidate, application, interview) => {
-
-  const isOnline = interview.mode === "online";
-
-  const formattedDate = (() => {
-    const d = new Date(interview.date);
-    const day = String(d.getUTCDate()).padStart(2, "0");
-    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const year = d.getUTCFullYear();
-    return `${day}-${month}-${year}`;
-  })();
-
-
-
-  const formattedTime = new Date(interview.time).toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Asia/Kolkata",
-  });
-
-
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <style>
-          body {
-              font-family: Arial, Helvetica, sans-serif;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              color: #111111;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              padding: 20px;
-          }
-          p, li {
-              line-height: 1.6;
-              font-size: 15px;
-          }
-          .details-box {
-              margin: 20px 0;
-              padding: 15px 0;
-              border-top: 1px solid #ddd;
-              border-bottom: 1px solid #ddd;
-          }
-          .detail-item {
-              margin: 8px 0;
-          }
-      </style>
-  </head>
-
-  <body>
-      <div class="container">
-
-          <p>Dear <strong>${candidate.fullName}</strong>,</p>
-
-          <p>
-            Awesome news — we’d love to move you forward to the interview stage for the role of 
-            <strong>${application.job.title}</strong>!
-          </p>
-
-          <p>Here’s what’s next:</p>
-
-          <div class="details-box">
-
-              <div class="detail-item">
-                  <strong>When:</strong> ${formattedDate} / ${formattedTime}
-              </div>
-
-              ${isOnline
-      ? `
-                    <div class="detail-item">
-                        <strong>Interview Mode:</strong> Online
-                    </div>
-
-                    <div class="detail-item">
-                        <strong>Meeting Link:</strong> <a href="${interview.meetingLink}" target="_blank">${interview.meetingLink}</a>
-                    </div>
-
-                    ${interview.instructions
-        ? `<div class="detail-item"><strong>Instructions:</strong> ${interview.instructions}</div>`
-        : ""
-      }
-                  `
-      : `
-                    <div class="detail-item">
-                        <strong>Interview Mode:</strong> Offline (In-Person)
-                    </div>
-
-                    <div class="detail-item">
-                        <strong>Venue:</strong><br>
-                        ${process.env.COMPANY_NAME}<br>
-                        ${interview.venue}
-                    </div>
-
-                    <div class="detail-item">
-                        <strong>Required Document:</strong> Aadhar Card Xerox
-                    </div>
-
-                    <div class="detail-item">
-                        <strong>Dress Code:</strong> Formal attire is mandatory
-                    </div>
-                  `
-    }
-
-          </div>
-
-          <p>
-            During this discussion, we’ll talk about your projects, your approach to problem-solving, and learn more about you.
-          </p>
-
-          <p>
-            Please confirm your availability for the scheduled time.  
-            Looking forward to connecting!
-          </p>
-
-          <p>
-            Regards,<br>
-            ${process.env.COMPANY_NAME || "Company Name"}
-          </p>
-
-          <p style="font-size: 12px; color: #555; margin-top: 15px;">
-              This is an automated email. Please do not reply to this message.
-          </p>
-
-      </div>
-  </body>
-  </html>
-  `;
-};
-
-export const interviewRescheduledEmailTemplate = (candidate, application, interview) => {
-  const isOnline = interview.mode === "online";
-
-  // Format new date
-  const formattedDate = (() => {
-    const d = new Date(interview.date);
-    const day = String(d.getUTCDate()).padStart(2, "0");
-    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const year = d.getUTCFullYear();
-    return `${day}-${month}-${year}`;
-  })();
-
-  // Format new time
-  const formattedTime = new Date(interview.time).toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Asia/Kolkata",
-  });
-
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <style>
-          body {
-              font-family: 'Segoe UI', Tahoma, sans-serif;
-              background: #f5f5f5;
-              margin: 0;
-              padding: 20px;
-              color: #111827;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              background: #ffffff;
-              border-radius: 8px;
-              border: 1px solid #e5e7eb;
-          }
-          .header {
-              background: #1f2937;
-              color: white;
-              padding: 18px 25px;
-          }
-          .content {
-              padding: 30px;
-              font-size: 15px;
-              line-height: 1.6;
-          }
-          .info-box {
-              border: 1px solid #d1d5db;
-              padding: 18px;
-              margin: 20px 0;
-              background: #fafafa;
-              border-radius: 6px;
-          }
-          .info-title {
-              font-weight: bold;
-              margin-bottom: 10px;
-              font-size: 15px;
-              color: #1f2937;
-          }
-          .info-item {
-              margin-bottom: 10px;
-              font-size: 15px;
-              color: #333;
-          }
-          .label {
-              font-weight: 600;
-              color: #111827;
-          }
-          .btn {
-              display: inline-block;
-              background: #1f2937;
-              color: white !important;
-              padding: 12px 28px;
-              text-decoration: none;
-              border-radius: 5px;
-              font-weight: 600;
-              margin-top: 25px;
-          }
-          .footer {
-              background: #1f2937;
-              color: #ffffff;
-              padding: 20px;
-              text-align: center;
-              font-size: 12px;
-              border-radius: 0 0 8px 8px;
-          }
-      </style>
-  </head>
-
-  <body>
-      <div class="container">
-
-          <div class="content">
-              <p>Dear <strong>${candidate.fullName}</strong>,</p>
-
-              <p>
-                This is to inform you that your interview for the position of 
-                <strong>${application.job.title}</strong> has been rescheduled.
-              </p>
-
-              <!-- New Details -->
-              <div class="info-box">
-                  <div class="info-title">Updated Schedule</div>
-
-                  <div class="info-item"><span class="label">New Date:</span> ${formattedDate}</div>
-                  <div class="info-item"><span class="label">New Time:</span> ${formattedTime}</div>
-                  <div class="info-item"><span class="label">Mode:</span> ${interview.mode.toUpperCase()}</div>
-
-                  ${isOnline
-      ? `<div class="info-item"><span class="label">Meeting Link:</span> <a href="${interview.meetingLink}" target="_blank">${interview.meetingLink}</a></div>`
-      : `<div class="info-item"><span class="label">Venue:</span> ${interview.venue}</div>`
-    }
-
-                  ${interview.instructions
-      ? `<div class="info-item"><span class="label">Instructions:</span> ${interview.instructions}</div>`
-      : ""
-    }
-              </div>
-
-              <p>
-                Kindly ensure your availability for the updated schedule.  
-                For any further information, our HR team will connect with you.
-              </p>
-          </div>
-
-          <div class="footer">
-            <p>Regards,<br>
-              ${process.env.COMPANY_NAME || "Company Name"}</p>
-
-              <p style="opacity:0.8; margin-top: 10px;">
-                This is an automated email. Please do not reply.
-              </p>
-          </div>
-
-      </div>
-  </body>
-  </html>
-  `;
-};
-
-
-export const applicationSubmittedEmailTemplate = (candidate, job) => {
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <meta charset="UTF-8" />
-      <style>
-          body {
-              font-family: Arial, Helvetica, sans-serif;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              color: #111111;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              padding: 20px;
-          }
-          p {
-              font-size: 15px;
-              line-height: 1.6;
-              margin: 12px 0;
-          }
-          .section-title {
-              font-size: 20px;
-              font-weight: bold;
-              margin-bottom: 20px;
-          }
-          .footer-text {
-              font-size: 12px;
-              color: #555555;
-              margin-top: 30px;
-          }
-      </style>
-  </head>
-
-  <body>
-      <div class="container">
-
-          <p>Dear <strong>${candidate.fullName}</strong>,</p>
-
-          <p>
-              Thank you for your interest in 
-              <strong>${process.env.COMPANY_NAME || "Our Company"}</strong> 
-              and for applying for the position of 
-              <strong>${job.title}</strong>.
-          </p>
-
-          <p>
-              Our Talent Acquisition team will review your application. If your 
-              profile is shortlisted, we will contact you regarding the next steps 
-              in the selection process.
-          </p>
-          
-          <p>
-              Note: To check the current status or updates regarding your application, please visit the Application Portal and review your Timeline
-          </p>
-
-          <p>
-              If you do not receive any communication from us within 30 days, 
-              please consider that your application was not selected for the next stage. 
-              However, your details will remain in our database for future opportunities 
-              in accordance with our privacy policy.
-          </p>
-
-          <p style="margin-top: 25px;">
-              Regards,<br />
-              <strong>${process.env.COMPANY_NAME || "Company Name"}</strong>
-          </p>
-
-          <p class="footer-text">
-              This is an automated email. Please do not reply to this message.
-          </p>
-
-      </div>
-  </body>
-  </html>
-  `;
-};
-
-
-export const interviewSelectedEmailTemplate = (candidate, job) => {
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <style>
-          body {
-              font-family: Arial, Helvetica, sans-serif;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              color: #111111;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              padding: 20px;
-          }
-          p {
-              line-height: 1.6;
-              font-size: 15px;
-          }
-      </style>
-  </head>
-
-  <body>
-      <div class="container">
-
-          <p>Dear <strong>${candidate.fullName}</strong>,</p>
-
-          <p>
-            Thank you once again for taking the time to interview with us for the position of 
-            <strong>${job.title}</strong> at 
-            <strong>${process.env.COMPANY_NAME || "KIAQ TECHNOLOGIES PRIVATE LIMITED"}</strong>.
-          </p>
-
-          <p>
-            We are pleased to inform you that you have been selected for the role.
-            Your skills, experience, and positive attitude make you an excellent fit for our team.
-          </p>
-
-          <p>
-            You will receive your official offer letter within the next 48 hours. It will include complete details regarding your compensation, benefits, start date, and other essential information.
-          </p>
-
-          <p>
-            If you have any questions in the meantime, please feel free to reach out to us directly.
-          </p>
-
-          <p>
-            We look forward to welcoming you onboard and working together.
-          </p>
-
-          <p>
-            Kind Regards,<br>
-            ${process.env.COMPANY_NAME || "KIAQ TECHNOLOGIES PRIVATE LIMITED"}
-          </p>
-
-          <p style="font-size: 12px; color: #555; margin-top: 20px;">
-            This is an automated email. Please do not reply to this message.
-          </p>
-
-      </div>
-  </body>
-  </html>
-  `;
-};
-
-
-export const interviewRejectedEmailTemplate = (candidate, job) => {
-  return `
-  <!DOCTYPE html>
-  <html>
-  <head>
-      <style>
-          body {
-              font-family: Arial, Helvetica, sans-serif;
-              background: #ffffff;
-              margin: 0;
-              padding: 0;
-              color: #111111;
-          }
-          .container {
-              max-width: 620px;
-              margin: 0 auto;
-              padding: 20px;
-          }
-          p {
-              line-height: 1.6;
-              font-size: 15px;
-          }
-      </style>
-  </head>
-
-  <body>
-      <div class="container">
-
-          <p>Dear <strong>${candidate.fullName}</strong>,</p>
-
-          <p>
-            Thank you for taking the time to interview with us for the position of 
-            <strong>${job.title}</strong> at 
-            <strong>${process.env.COMPANY_NAME || "KIAQ TECHNOLOGIES PRIVATE LIMITED"}</strong>.
-          </p>
-
-          <p>
-            We truly appreciate your interest in joining our team and the effort you put into your application and interview process.
-          </p>
-
-          <p>
-            After careful consideration, we regret to inform you that we will not be moving forward with your application at this time.
-            This decision was not easy, as we had the opportunity to meet many talented candidates.
-          </p>
-
-          <p>
-            We encourage you to apply for future opportunities with us that align with your skills and experience, and we wish you every success in your job search and professional journey.
-          </p>
-
-          <p>
-            Thank you once again for your interest in 
-            <strong>${process.env.COMPANY_NAME || "KIAQ TECHNOLOGIES PRIVATE LIMITED"}</strong>.
-          </p>
-
-          <p>
-            Kind Regards,<br>
-            ${process.env.COMPANY_NAME || "KIAQ TECHNOLOGIES PRIVATE LIMITED"}
-          </p>
-
-          <p style="font-size: 12px; color: #555; margin-top: 20px;">
-            This is an automated email. Please do not reply to this message.
-          </p>
-
-      </div>
-  </body>
-  </html>
-  `;
 };

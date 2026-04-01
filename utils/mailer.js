@@ -96,7 +96,7 @@ import dotenv from "dotenv";
 dotenv.config();
 import nodemailer from "nodemailer";
 import Mailjet from 'node-mailjet';
-import { appointmentLetterEmailTemplate, offerLetterEmailTemplate, offerStatusUpdateTemplate } from "./emailTemplates.js";
+import { appointmentLetterEmailTemplate } from "./emailTemplates.js";
 
 // Create SMTP transporter (Gmail)
 // const transporter = nodemailer.createTransport({
@@ -165,84 +165,7 @@ export const sendMail = async ({ to, subject, html }) => {
     }
 };
 
-// ----------------------------
-// 2. SEND OFFER LETTER WITH PDF ATTACHMENT
-// ----------------------------
-export const sendOfferEmail = async (candidate, application, pdfBuffer) => {
-    try {
-        const htmlContent = offerLetterEmailTemplate(
-            candidate,
-            application,
-        );
 
-        // const mailOptions = {
-        //     from: `"${process.env.COMPANY_NAME}" <${process.env.MAIL_FROM}>`,
-        //     to: `${candidate.fullName} <${candidate.email}>`,
-        //     subject: `Offer of Employment - ${application.job.title} - ${application.job.department}`,
-        //     html: htmlContent,
-        //     attachments: [
-        //         {
-        //             filename: `Offer_Letter_${application.job.title.replace(/\s+/g, '_')}.pdf`,
-        //             content: pdfBuffer,
-        //             encoding: "base64",
-        //         },
-        //     ],
-        // };
-
-        const subject = `WELCOME TO ${process.env.COMPANY_NAME} - OFFER LETTER`;
-
-        // Mailjet requires base64, ensure buffer is converted
-        const attachment = [
-            {
-                ContentType: "application/pdf",
-                Filename: `Offer_Letter_${application.job.title.replace(/\s+/g, '_')}.pdf`,
-                Base64Content: pdfBuffer.toString("base64"),
-            }
-        ];
-
-        const result = await SendMailJet({
-            to: candidate.email,
-            subject,
-            html: htmlContent,
-            attachments: attachment
-        });
-        return result;
-
-    } catch (error) {
-        console.log("Offer Email Error:", error);
-        return error;
-    }
-};
-
-// ----------------------------
-// 3. OFFER STATUS UPDATE EMAIL
-// ----------------------------
-export const sendOfferStatusEmail = async (candidate, application, status) => {
-    try {
-        const htmlContent = offerStatusUpdateTemplate(
-            candidate,
-            application,
-            status
-        );
-
-        // const mailOptions = {
-        //     from: `"${process.env.COMPANY_NAME}" <${process.env.MAIL_FROM}>`,
-        //     to: `${candidate.fullName} <${candidate.email}>`,
-        //     subject: `Offer Update - ${application.job.title}`,
-        //     html: htmlContent,
-        // };
-
-        const subject = `Offer Update - ${application.job.title}`;
-
-        // await transporter.sendMail(mailOptions);
-        const result = await SendMailJet({ to: candidate.email, subject, html: htmlContent });
-        return result;
-
-    } catch (error) {
-        console.log("Offer Status Email Error:", error);
-        return error;
-    }
-};
 
 
 

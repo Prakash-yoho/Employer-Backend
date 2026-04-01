@@ -10,7 +10,7 @@ import NotificationService from '../services/notificationService.js';
 import EmployerUser from '../model/EmployerUser.js';
 import Notification from '../model/Notification.js';
 import { sendAppointmentEmail, sendMail } from '../utils/mailer.js';
-import { newEmployeeTemplate } from '../utils/Employer/emailTemplates.js';
+import { newEmployeeTemplate } from '../utils/emailTemplates.js';
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 dotenv.config();

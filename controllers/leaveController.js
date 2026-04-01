@@ -13,7 +13,7 @@ import {
     leaveBalanceValidation
 } from '../validations/leaveValidation.js';
 import { sendMail } from '../utils/mailer.js';
-import { leaveEmailTemplate } from '../utils/Employer/emailTemplates.js';
+import { leaveEmailTemplate } from '../utils/emailTemplates.js';
 
 // Helper function for validation
 const validateRequest = (schema, data) => {
