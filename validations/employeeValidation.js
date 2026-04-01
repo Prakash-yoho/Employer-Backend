@@ -45,12 +45,13 @@ export const createEmployeeSchema = Joi.object({
         .min(8)
         .max(128)
         .required()
-        .pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$'))
+        .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
         .messages({
             'string.empty': 'Official password is required',
             'string.min': 'Password must be at least 8 characters',
             'string.max': 'Password cannot exceed 128 characters',
-            'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character'
+            'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character',
+            'any.required': 'Official password is required'
         }),
 
     department: Joi.string()
@@ -340,7 +341,7 @@ export const updateEmployeeProfileSchema = Joi.object({
 
     siblings: Joi.array().items(
         Joi.object({
-            _id: Joi.string().optional(), 
+            _id: Joi.string().optional(),
             siblingName: Joi.string()
                 .trim(),
 
@@ -500,7 +501,7 @@ export const updateEmployeeProfileSchema = Joi.object({
 
     previousEmployers: Joi.array().items(
         Joi.object({
-            _id: Joi.string().optional(), 
+            _id: Joi.string().optional(),
             companyName: Joi.string()
                 .trim(),
 
