@@ -1454,3 +1454,37 @@ export const verifyAppointmentLetter = async (req, res) => {
     });
   }
 };
+
+
+
+// Get all employees without pagination (HR/Admin only) - minimal fields
+export const getAllEmployeesAppointment = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only ADMIN or HR can view all employees'
+            });
+        }
+
+        const employees = await Employee.find({})
+            .select('firstName lastName officialEmail employeeId appointmentLetters isActive')
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Employees retrieved successfully',
+            data: {
+                employees,
+                total: employees.length
+            }
+        });
+    } catch (error) {
+        console.error('Get all employees minimal error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};

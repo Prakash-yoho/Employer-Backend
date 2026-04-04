@@ -1,5 +1,5 @@
 import express from 'express';
-import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
+import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getAllEmployeesAppointment, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 import upload, { handleMulterError } from '../config/imageMulter.js'
 
@@ -7,6 +7,7 @@ const router = express.Router();
 
 // Employee Public routes
 router.post('/login', employeeLogin);
+router.post('/profile/send-appointmentletter', sendAppointmentLetter);
 
 // Employee protected routes (require employee authentication)
 router.use('/profile', authenticateEmployee);
@@ -40,6 +41,9 @@ router.get('/', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR', "PROJECT_MANAGER"]),
 
 // Get employees with update requests (ADMIN/HR only)
 router.get('/update-requests', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), getEmployeesWithUpdateRequests);
+
+router.get('/all-appointmentletters', getAllEmployeesAppointment);
+
 
 // Get employee by ID (ADMIN/HR only)
 router.get('/:id', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), getEmployeeById);

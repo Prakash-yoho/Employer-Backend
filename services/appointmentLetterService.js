@@ -63,9 +63,7 @@ export const generateAppointmentLetter = async (employee) => {
         .fontSize(10)
         .font("Helvetica-Bold")
         .text(
-          formatLongDate2(employee.joiningDate
-            ? new Date(employee.joiningDate)
-            : new Date()),
+          formatLongDate2(new Date()),
           leftMargin,
           currentY,
           { width: contentWidth, align: "right" }
