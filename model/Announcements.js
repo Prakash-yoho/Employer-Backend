@@ -1,3 +1,4 @@
+// model/Announcements.js
 import mongoose, { Schema } from "mongoose";
 
 const announcementSchema = new Schema(
@@ -45,6 +46,15 @@ const announcementSchema = new Schema(
       type: Date,
       required: true,
     },
+    // In Announcements.js model — fix the ref
+createdBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "EmployerUser",   // ← was "Employee", change to your employer model name
+},
+createdByName: {
+  type: String,
+  default: "",
+},
     expiryDate: {
       type: Date,
     },
@@ -54,14 +64,14 @@ const announcementSchema = new Schema(
     },
     attachments: [
       {
-        filename: String,
-        url: String,
+        filename: { type: String },
+        url:      { type: String },
+        key:      { type: String },   // ← S3 key for deletion
+        isImage:  { type: Boolean, default: false },
       },
     ],
   },
-  {
-    timestamps: true, 
-  }
+  { timestamps: true }
 );
 
 export default mongoose.model("Announcement", announcementSchema);
