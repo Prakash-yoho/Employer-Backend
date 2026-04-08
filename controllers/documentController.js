@@ -122,7 +122,7 @@ export const uploadDocument = async (req, res) => {
         ];
 
         const validExperienceSubTypes = [
-            'experienceCertificate', 'relievingCertificate', 'appointmentLetter', 'payslips'
+            'experienceCertificate', 'relievingCertificate', 'sixmonthstatement', 'appointmentLetter', 'payslips'
         ];
 
         let currentDocument;
@@ -336,6 +336,7 @@ export const addExperienceCompany = async (req, res) => {
             companyName,
             experienceCertificate: { status: 'pending' },
             relievingCertificate: { status: 'pending' },
+            sixmonthstatement: { status: 'pending' },
             payslips: [],
             appointmentLetter: { status: 'pending' }
         });
@@ -896,6 +897,12 @@ export const deleteExperience = async (req, res) => {
         if (experienceToDelete.experienceCertificate?.fileKey) {
             deletePromises.push(
                 deleteDocumentFromS3(experienceToDelete.experienceCertificate.fileKey)
+                    .catch(err => console.error('Error deleting experience certificate:', err))
+            );
+        }
+        if (experienceToDelete.sixmonthstatement?.fileKey) {
+            deletePromises.push(
+                deleteDocumentFromS3(experienceToDelete.sixmonthstatement.fileKey)
                     .catch(err => console.error('Error deleting experience certificate:', err))
             );
         }

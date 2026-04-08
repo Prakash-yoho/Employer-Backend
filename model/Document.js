@@ -55,6 +55,7 @@ const experienceDocumentSchema = new Schema({
         trim: true
     },
     experienceCertificate: documentFieldSchema,
+    sixmonthstatement:documentFieldSchema,
     relievingCertificate: documentFieldSchema,
     payslips: [documentFieldSchema], // Array for multiple payslips (last 6 months)
     appointmentLetter: documentFieldSchema
@@ -285,7 +286,7 @@ documentSchema.pre('save', async function (next) {
             this.experienceDocuments.forEach(exp => {
                 if (exp) {
                     // Count each document field in experience
-                    const expFields = ['experienceCertificate', 'relievingCertificate', 'appointmentLetter'];
+                    const expFields = ['experienceCertificate', 'relievingCertificate', 'sixmonthstatement', 'appointmentLetter'];
                     expFields.forEach(field => {
                         if (exp[field] && exp[field].status && exp[field].status !== 'pending') {
                             totalDocuments++;

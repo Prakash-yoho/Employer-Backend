@@ -17,7 +17,8 @@ const experienceDocumentValidation = Joi.object({
     experienceCertificate: documentFieldValidation,
     relievingCertificate: documentFieldValidation,
     payslips: Joi.array().items(documentFieldValidation),
-    appointmentLetter: documentFieldValidation
+    appointmentLetter: documentFieldValidation,
+    sixmonthstatement: documentFieldValidation,
 });
 
 // Create/Update document validation
@@ -61,7 +62,7 @@ export const verifyDocumentSchema = Joi.object({
     }),
     subDocumentType: Joi.string().when('documentType', {
         is: Joi.string().pattern(/^experienceDocuments/),
-        then: Joi.valid('experienceCertificate', 'relievingCertificate', 'appointmentLetter', 'payslips').required(),
+        then: Joi.valid('experienceCertificate', 'relievingCertificate', 'appointmentLetter', 'payslips', 'sixmonthstatement').required(),
         otherwise: Joi.optional()
     }),
     payslipIndex: Joi.number().integer().min(0).when('subDocumentType', {
