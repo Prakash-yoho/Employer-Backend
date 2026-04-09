@@ -58,7 +58,7 @@ export const generateExperienceCertificate = (employee) => {
                 refNo       = 'K000000',
                 letterDate  = '09th April 2026',
                 hrName      = process.env.HR_NAME  || 'Hazeena Begum A',
-                hrTitle     = process.env.HR_TITLE || 'HR Executive - Human Resource',
+                hrTitle     = process.env.HR_TITLE || 'SR Executive - Human Resource',
             } = employee;
 
             const firstName = fullName.split(' ')[0];

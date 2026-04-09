@@ -87,7 +87,7 @@ const buildEmployeeData = (employee) => ({
     letterDate: ordinalDate(new Date()),
     refNo: employee.employeeId,
     hrName: process.env.HR_NAME || 'Hazeena Begum A',
-    hrTitle: process.env.HR_TITLE || 'HR Executive - Human Resource',
+    hrTitle: process.env.HR_TITLE || 'SR Executive - Human Resource',
 });
 
 
@@ -1882,7 +1882,7 @@ export const generateRelievingLetterDirect = async (req, res) => {
             joiningDate, leavingDate, resignationDate,
             letterDate, refNo,
             hrName:  hrName  || process.env.HR_NAME  || 'Hazeena Begum A',
-            hrTitle: hrTitle || process.env.HR_TITLE || 'HR Executive - Human Resource',
+            hrTitle: hrTitle || process.env.HR_TITLE || 'SR Executive - Human Resource',
         };
  
         const pdfBuffer = await generateRelievingLetter(empData);
@@ -1954,7 +1954,7 @@ export const generateExperienceCertificateDirect = async (req, res) => {
             joiningDate, leavingDate,
             letterDate, refNo,
             hrName:  hrName  || process.env.HR_NAME  || 'Hazeena Begum A',
-            hrTitle: hrTitle || process.env.HR_TITLE || 'HR Executive - Human Resource',
+            hrTitle: hrTitle || process.env.HR_TITLE || 'SR Executive - Human Resource',
         };
  
         const pdfBuffer = await generateExperienceCertificate(empData);
