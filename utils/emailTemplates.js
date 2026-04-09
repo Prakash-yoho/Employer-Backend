@@ -445,6 +445,146 @@ export const appointmentLetterEmailTemplate = (employee) => {
 };
 
 
+
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 3 OF 7
+// ADD THESE TWO FUNCTIONS to: utils/emailTemplates.js
+// (paste at the bottom of your existing emailTemplates.js file)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Relieving letter email template
+ * Matches the same dark-teal + orange brand style as appointmentLetterEmailTemplate
+ */
+export const relievingLetterEmailTemplate = (employee) => {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #111111; }
+        .container { max-width: 600px; margin: 10px auto; padding: 15px; }
+        p { font-size: 15px; line-height: 1.6; margin: 12px 0; color: #333333; }
+        .greeting { font-size: 16px; font-weight: bold; margin-bottom: 16px; }
+        .highlight { margin: 16px 0; font-size: 14px; }
+        .highlight strong { font-weight: bold; }
+        .note { font-size: 13px; color: #555555; font-style: italic; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <p class="greeting">Dear ${employee.firstName} ${employee.lastName},</p>
+
+        <p>
+            This is to confirm that your resignation has been accepted, and you have been formally relieved 
+            from your duties at <strong>KIAQ Technologies Private Limited</strong>.
+        </p>
+
+        <p>
+            Please find your <strong>Relieving Letter</strong> attached to this email.
+        </p>
+
+        <div class="highlight">
+            <p><strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}</p>
+            <p><strong>Employee ID:</strong> ${employee.employeeId}</p>
+            <p><strong>Designation:</strong> ${employee.designation || '—'}</p>
+            <p><strong>Department:</strong> ${employee.department || '—'}</p>
+        </div>
+
+        <p>
+            We sincerely appreciate your contributions during your tenure with us and wish you all the very best 
+            in your future endeavors.
+        </p>
+
+        <p class="note">
+            This is an automated email. Please do not reply to this message.
+        </p>
+    </div>
+</body>
+</html>
+    `;
+};
+
+/**
+ * Experience certificate email template
+ * Same dark-teal + orange brand style
+ */
+export const experienceCertificateEmailTemplate = (employee) => {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body { margin: 0; padding: 0; background: #f4f4f4; font-family: Arial, Helvetica, sans-serif; color: #111111; }
+        .wrap { max-width: 620px; margin: 30px auto; background: #ffffff; border-radius: 8px; overflow: hidden; }
+        .top-bar { background: #002B38; padding: 20px 32px; }
+        .brand { font-size: 22px; font-weight: bold; color: #ffffff; }
+        .brand span { color: #E05C1A; }
+        .orange-line { height: 4px; background: #E05C1A; }
+        .body { padding: 32px; }
+        p { font-size: 15px; line-height: 1.7; margin: 10px 0; color: #333333; }
+        .greeting { font-size: 16px; color: #002B38; font-weight: bold; margin-bottom: 14px; }
+        .highlight {
+            background: #fff7f2; border-left: 4px solid #E05C1A;
+            padding: 14px 18px; border-radius: 4px; margin: 20px 0; font-size: 14px; color: #333;
+        }
+        .highlight strong { color: #002B38; }
+        .note { font-size: 13px; color: #555555; font-style: italic; margin-top: 20px; }
+        .footer { background: #002B38; padding: 16px 32px; text-align: center; }
+        .footer p { color: #aaaaaa; font-size: 11px; margin: 0; line-height: 1.7; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="top-bar">
+            <div class="brand">KIAQ<span> TECHNOLOGIES</span></div>
+        </div>
+        <div class="orange-line"></div>
+        <div class="body">
+            <div class="greeting">Dear ${employee.firstName} ${employee.lastName},</div>
+            <p>
+                We are pleased to issue your <strong>Experience Certificate</strong> from
+                <strong>Kiaq Technologies Private Limited</strong>. Please find the document attached.
+            </p>
+            <div class="highlight">
+                <strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}<br/>
+                <strong>Employee ID:</strong> ${employee.employeeId}<br/>
+                <strong>Designation:</strong> ${employee.designation || '—'}<br/>
+                <strong>Department:</strong> ${employee.department || '—'}
+            </div>
+            <p>
+                It has been a pleasure having you as part of our team. We deeply value your
+                contributions and wish you continued success in all your future endeavours.
+            </p>
+            <p class="note">
+                This is an automated email. Please do not reply to this message.
+            </p>
+        </div>
+        <div class="footer">
+            <p>
+                KIAQ TECHNOLOGIES PRIVATE LIMITED<br/>
+                M181, Cactus, Ground Floor, Block B, TECCI Park, Rajiv Gandhi Salai,<br/>
+                Elcot SEZ, Sholinganallur, Chennai – 600119, Tamil Nadu, India<br/>
+                Email: hr@kiaq.in  |  Website: www.kiaq.in
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+    `;
+};
+
+
+
 const formatDate = (date) => {
   if (!date) return '-';
   return new Date(date).toLocaleDateString('en-GB', {

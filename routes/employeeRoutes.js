@@ -1,5 +1,5 @@
 import express from 'express';
-import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getAllEmployeesAppointment, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
+import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, generateExperienceCertificateDirect, generateRelievingLetterDirect, getAllEmployees, getAllEmployeesAppointment, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, getResignedEmployees, previewExperienceCertificate, previewRelievingLetter, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, sendExperienceCertificate, sendRelievingLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 import upload, { handleMulterError } from '../config/imageMulter.js'
 
@@ -44,6 +44,49 @@ router.get('/update-requests', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), get
 
 router.get('/all-appointmentletters', getAllEmployeesAppointment);
 
+
+// Resigned employees management (HR/Admin)
+router.get(
+    '/resigned',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    getResignedEmployees
+);
+
+router.post(
+    '/generate-relieving-letter',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    generateRelievingLetterDirect
+);
+ 
+router.post(
+    '/generate-experience-certificate',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    generateExperienceCertificateDirect
+);
+ 
+router.post(
+    '/:id/send-relieving-letter',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    sendRelievingLetter
+);
+ 
+router.post(
+    '/:id/send-experience-certificate',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    sendExperienceCertificate
+);
+ 
+router.get(
+    '/:id/preview-relieving-letter',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    previewRelievingLetter
+);
+ 
+router.get(
+    '/:id/preview-experience-certificate',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    previewExperienceCertificate
+);
 
 // Get employee by ID (ADMIN/HR only)
 router.get('/:id', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), getEmployeeById);
