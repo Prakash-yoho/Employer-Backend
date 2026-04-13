@@ -115,9 +115,9 @@ export const uploadDocument = async (req, res) => {
 
         // Define valid document types
         const validDocumentTypes = [
-            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate',
+            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate','eleventhCertificate',
             'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter',
-            'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate',
+            'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate','pgconsolidatedCertificate','diplomaconsolidatedCertificate',
             'diplomaCertificate', 'pgCertificate', 'trainingCertificates'
         ];
 
@@ -1056,11 +1056,13 @@ export const previewDocument = async (req, res) => {
                 addressProof: 'addressProof',
                 birthCertificate: 'birthCertificate',
                 tenthCertificate: 'tenthCertificate',
+                eleventhCertificate: 'eleventhCertificate',
                 twelfthCertificate: 'twelfthCertificate',
                 ugCertificate: 'ugCertificate',
                 pgCertificate: 'pgCertificate',
                 diplomaCertificate: 'diplomaCertificate',
                 consolidatedCertificate: 'consolidatedCertificate',
+                pgconsolidatedCertificate: 'pgconsolidatedCertificate',
                 signedOfferLetter: 'signedOfferLetter',
                 bankPassbook: 'bankPassbook'
             };
@@ -1195,11 +1197,13 @@ export const downloadDocument = async (req, res) => {
                 addressProof: "addressProof",
                 birthCertificate: "birthCertificate",
                 tenthCertificate: "tenthCertificate",
+                eleventhCertificate: "eleventhCertificate",
                 twelfthCertificate: "twelfthCertificate",
                 ugCertificate: "ugCertificate",
                 pgCertificate: "pgCertificate",
                 diplomaCertificate: "diplomaCertificate",
                 consolidatedCertificate: "consolidatedCertificate",
+                pgconsolidatedCertificate: "pgconsolidatedCertificate",
                 signedOfferLetter: "signedOfferLetter",
                 bankPassbook: "bankPassbook",
             };
