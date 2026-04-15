@@ -1,5 +1,5 @@
 import express from 'express';
-import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeProfile, getEmployeesWithUpdateRequests, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
+import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, getAllEmployees, getEmployeeById, getEmployeeFace, getEmployeeProfile, getEmployeesWithUpdateRequests, registerEmployeeFace, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 import upload, { handleMulterError } from '../config/imageMulter.js'
 
@@ -14,6 +14,10 @@ router.use('/profile', authenticateEmployee);
 router.get('/profile/me', getEmployeeProfile);
 router.put('/profile/me', updateEmployeeProfile);
 
+
+router.post('/profile/register-face', registerEmployeeFace);
+// employeeRoutes.js — add :employeeId param to the route
+router.get('/profile/face/:employeeId', getEmployeeFace); // ← was '/profile/face'
 
 
 router.post('/profile/send-appointmentletter', sendAppointmentLetter);

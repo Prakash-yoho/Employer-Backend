@@ -13,6 +13,7 @@ import { sendAppointmentEmail, sendMail } from '../utils/mailer.js';
 import { newEmployeeTemplate } from '../utils/emailTemplates.js';
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
+import { uploadFaceImage } from "../utils/faceUpload.js";
 dotenv.config();
 
 // Generate JWT token
@@ -1451,6 +1452,95 @@ export const verifyAppointmentLetter = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+
+
+
+
+
+
+
+
+
+// Register face
+// import { uploadFaceImage } from "../utils/uploadFaceImage.js";
+
+export const registerEmployeeFace = async (req, res) => {
+  try {
+    const { faceImage, faceDescriptor } = req.body;
+
+    if (!faceImage || !faceDescriptor) {
+      return res.status(400).json({
+        success: false,
+        message: "Image and face descriptor are required"
+      });
+    }
+
+    const employee = await Employee.findById(req.user._id);
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found"
+      });
+    }
+
+    const faceImageUrl = await uploadFaceImage(faceImage, "faces");
+
+    employee.faceImage = faceImageUrl;
+    employee.faceDescriptor = faceDescriptor;
+
+    await employee.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Face registered successfully",
+      data: {
+        faceImage: faceImageUrl,
+        faceDescriptor
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// employeeController.js — fix getEmployeeFace to support employeeId param
+export const getEmployeeFace = async (req, res) => {
+  try {
+    const { employeeId } = req.params; // ← use param instead of req.user._id
+
+    const employee = await Employee.findOne({ employeeId })
+      .select("faceImage faceDescriptor employeeId firstName lastName");
+      console.log(employee)
+
+    if (!employee || !employee.faceDescriptor) {
+      return res.status(404).json({
+        success: false,
+        message: "Face not registered"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        employeeId: employee.employeeId,
+        name: employee.firstName + " " + employee.lastName,
+        faceDescriptor: employee.faceDescriptor,
+        faceImage: employee.faceImage,
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };

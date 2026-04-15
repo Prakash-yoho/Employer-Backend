@@ -188,6 +188,15 @@ const employeeSchema = new Schema({
         required: true,
         trim: true
     },
+
+    faceImage: {
+    type: String, // S3 URL
+  },
+  faceDescriptor: {
+    type: [Number], // 128-d array
+    default: [],
+  },
+  
     gender: {
         type: String,
         enum: ['Male', 'Female', 'Other'],

@@ -25,6 +25,8 @@ import cron from "node-cron"
 import { clearExpiredAssignments } from './utils/clearExpiredAssignments.js'
 import { sendScheduleExpiryReminders } from './utils/Sendscheduleexpiryreminders.js'
 import defaultDocsRoutes from './routes/defaultDocsRoutes.js'
+import attendanceRoutes from './routes/attendanceRoutes.js'
+
 dotenv.config()
 
 connectDB()
@@ -76,6 +78,7 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/leaves', leaveRoutes)
+app.use("/api/attendance", attendanceRoutes);
 app.use('/api/employer/dashboard', dashboardHRAdminRoutes);
 app.use('/api/it-dashboard', itDashboardRoutes);
 app.use('/api/employee/dashboard', employeeDashboardRoutes);
