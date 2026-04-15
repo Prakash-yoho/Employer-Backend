@@ -27,6 +27,7 @@ import { sendScheduleExpiryReminders } from './utils/Sendscheduleexpiryreminders
 import defaultDocsRoutes from './routes/defaultDocsRoutes.js'
 import attendanceRoutes from './routes/attendanceRoutes.js'
 
+import announcementRoutes from './routes/announcementRoutes.js'
 dotenv.config()
 
 connectDB()
@@ -84,6 +85,7 @@ app.use('/api/it-dashboard', itDashboardRoutes);
 app.use('/api/employee/dashboard', employeeDashboardRoutes);
 app.use('/api/phases-schedules', PhaseScheduleRoutes);
 app.use("/api/projects",projectRoutes)
+app.use("/api/announcements",announcementRoutes)
 
 // ─── CRON JOBS ────────────────────────────────────────────────────────────────
 

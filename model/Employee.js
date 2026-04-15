@@ -376,6 +376,31 @@ const employeeSchema = new Schema({
         isVerified: { type: Boolean, default: false }, // ✅ important
         uploadedAt: { type: Date, default: Date.now }
     },
+
+    // Resignation & leaving dates (set by HR when deactivating)
+    resignationDate: {
+        type: Date,
+        default: null,
+    },
+    relievingDate: {
+        type: Date,
+        default: null,
+    },
+ 
+    // Relieving letter (generated + sent by HR)
+    relievingLetter: {
+        url:      { type: String, default: null },
+        fileName: { type: String, default: null },
+        sentAt:   { type: Date,   default: null },
+    },
+ 
+    // Experience certificate (generated + sent by HR)
+    experienceCertificate: {
+        url:      { type: String, default: null },
+        fileName: { type: String, default: null },
+        sentAt:   { type: Date,   default: null },
+    },
+    
     profileImageKey: {
         type: String,
         default: null

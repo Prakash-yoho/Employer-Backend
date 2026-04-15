@@ -1,6 +1,6 @@
 import express from 'express';
 import upload, { handleDocumentUploadError } from '../config/documentMulter.js'
-import { addExperienceCompany, deleteDocument, deleteExperience, downloadAppointmentLetter, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewAppointmentLetter, previewDocument, uploadDocument, verifyDocument } from '../controllers/documentController.js';
+import { addExperienceCompany, deleteDocument, deleteExperience, downloadAppointmentLetter, downloadAppointmentLetterByAdmin, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewAppointmentLetter, previewAppointmentLetterByAdmin, previewDocument, uploadDocument, verifyDocument } from '../controllers/documentController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -89,6 +89,21 @@ router.get(
 
 router.get("/preview-appointment-letter", authenticateEmployee, previewAppointmentLetter);
 router.get("/download-appointment-letter", authenticateEmployee, downloadAppointmentLetter);
+
+// HR/Admin appointment letter routes
+router.get(
+    "/employee/:employeeId/preview-appointment-letter",
+    authenticate,
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    previewAppointmentLetterByAdmin
+);
+
+router.get(
+    "/employee/:employeeId/download-appointment-letter",
+    authenticate,
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    downloadAppointmentLetterByAdmin
+);
 
 
 export default router;

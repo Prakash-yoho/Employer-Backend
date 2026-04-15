@@ -14,7 +14,90 @@ import { newEmployeeTemplate } from '../utils/emailTemplates.js';
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 import { uploadFaceImage } from "../utils/faceUpload.js";
+
+
+
+// ✅ must match the filename on disk exactly
+import { generateRelievingLetter }      from '../services/Relievingletterservice.js';
+import { generateExperienceCertificate } from '../services/Experiencecertificateservice.js';
+import { s3, S3_BUCKET } from '../config/s3.js';           // ← same import as saveAppointmentLetterInS3.js
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { SendMailJet } from '../utils/mailer.js';         // ← your Mailjet sender
+import {
+    relievingLetterEmailTemplate,
+    experienceCertificateEmailTemplate,
+} from '../utils/emailTemplates.js';                                      // ← step 3 templates
+import { saveExperienceCertificateInS3 } from '../utils/Saveexperiencecertificateins3.js';
+import { saveRelievingLetterInS3 } from '../utils/Saverelievingletterins3.js';
+
 dotenv.config();
+
+
+const getSignedS3Url = async (storedUrl) => {
+    const key = storedUrl.includes('.amazonaws.com/')
+        ? decodeURIComponent(storedUrl.split('.amazonaws.com/')[1].split('?')[0])
+        : storedUrl;
+    const cmd = new GetObjectCommand({ Bucket: S3_BUCKET, Key: key });
+    return getSignedUrl(s3, cmd, { expiresIn: 900 });
+};
+
+
+
+
+
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Format a Date object → "07-July-2025"
+ */
+const formatDate = (date) => {
+    if (!date) return '—';
+    return new Date(date).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+    }).replace(/ /g, '-');
+};
+
+/**
+ * Format a Date object → "09th April 2026"
+ */
+const ordinalDate = (date) => {
+    const d = new Date(date);
+    const day = d.getDate();
+    const suffix = (day % 10 === 1 && day !== 11) ? 'st'
+        : (day % 10 === 2 && day !== 12) ? 'nd'
+            : (day % 10 === 3 && day !== 13) ? 'rd' : 'th';
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+        .replace(/^\d+/, `${day}${suffix}`);
+};
+
+/**
+ * Builds the data object fed into PDF generators
+ */
+const buildEmployeeData = (employee) => ({
+    fullName: `${employee.firstName} ${employee.lastName}`,
+    employeeId: employee.employeeId,
+    designation: employee.designation || '—',
+    department: employee.department || '—',
+    joiningDate: formatDate(employee.createdAt),
+    leavingDate: formatDate(employee.relievingDate || employee.updatedAt),
+    resignationDate: formatDate(employee.resignationDate || employee.updatedAt),
+    letterDate: ordinalDate(new Date()),
+    refNo: employee.employeeId,
+    hrName: process.env.HR_NAME || 'Hazeena Begum A',
+    hrTitle: process.env.HR_TITLE || 'SR Executive - Human Resource',
+});
+
+
+
+
+
+
+
+
 
 // Generate JWT token
 const generateAuthToken = (user) => {
@@ -1313,147 +1396,147 @@ export const deleteEmployeeImageByAdmin = async (req, res) => {
 
 
 export const sendAppointmentLetter = async (req, res) => {
-  try {
-    const { employeeId } = req.body;
-
-    const employee = await Employee.findOne({ employeeId });
-
-    if (!employee) {
-      return res.status(404).json({
-        success: false,
-        message: "Employee not found",
-      });
-    }
-
-    // ✅ 1️⃣ Check if appointment letter already exists (object check)
-    if (employee.appointmentLetters && employee.appointmentLetters.url) {
-      return res.status(200).json({
-        success: true,
-        message: "Appointment letter was already sent previously",
-        data: {
-          employeeId: employee._id,
-          appointmentLetter: employee.appointmentLetters,
-          emailSent: true,
-        },
-      });
-    }
-
-    // ✅ 2️⃣ Prepare data for PDF
-    const formattedEmployee = {
-      ...employee.toObject(),
-      user: {
-        fullName: `${employee.firstName} ${employee.lastName}`,
-        fullNameS3: `${employee.firstName}${employee.lastName}`,
-      },
-      joiningDate: employee.createdAt,
-    };
-
-    // ✅ 3️⃣ Generate PDF
-    let pdfBuffer;
     try {
-      pdfBuffer = await generateAppointmentLetter(formattedEmployee);
-    } catch (err) {
-      console.error("PDF Error:", err);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to generate appointment letter",
-      });
+        const { employeeId } = req.body;
+
+        const employee = await Employee.findOne({ employeeId });
+
+        if (!employee) {
+            return res.status(404).json({
+                success: false,
+                message: "Employee not found",
+            });
+        }
+
+        // ✅ 1️⃣ Check if appointment letter already exists (object check)
+        if (employee.appointmentLetters && employee.appointmentLetters.url) {
+            return res.status(200).json({
+                success: true,
+                message: "Appointment letter was already sent previously",
+                data: {
+                    employeeId: employee._id,
+                    appointmentLetter: employee.appointmentLetters,
+                    emailSent: true,
+                },
+            });
+        }
+
+        // ✅ 2️⃣ Prepare data for PDF
+        const formattedEmployee = {
+            ...employee.toObject(),
+            user: {
+                fullName: `${employee.firstName} ${employee.lastName}`,
+                fullNameS3: `${employee.firstName}${employee.lastName}`,
+            },
+            joiningDate: employee.createdAt,
+        };
+
+        // ✅ 3️⃣ Generate PDF
+        let pdfBuffer;
+        try {
+            pdfBuffer = await generateAppointmentLetter(formattedEmployee);
+        } catch (err) {
+            console.error("PDF Error:", err);
+            return res.status(500).json({
+                success: false,
+                message: "Failed to generate appointment letter",
+            });
+        }
+
+        // ✅ 4️⃣ Upload to S3
+        let appointmentUrl;
+        try {
+            appointmentUrl = await saveAppointmentLetterInS3(
+                pdfBuffer,
+                formattedEmployee.user.fullNameS3
+            );
+
+            // ✅ Save as OBJECT (not array)
+            employee.appointmentLetters = {
+                url: appointmentUrl,
+                fileName: `${formattedEmployee.user.fullNameS3}_AppointmentLetter_Kiaq.pdf`,
+                uploadedAt: new Date(),
+            };
+
+            await employee.save();
+
+        } catch (uploadError) {
+            console.error("S3 Upload Error:", uploadError);
+            return res.status(500).json({
+                success: false,
+                message: "Failed to upload appointment letter",
+            });
+        }
+
+        // ✅ 5️⃣ Send Email
+        let emailSent = false;
+        try {
+            await sendAppointmentEmail(employee, pdfBuffer);
+            emailSent = true;
+        } catch (emailError) {
+            console.log("Email failed:", emailError);
+        }
+
+        // ✅ 6️⃣ Response
+        res.status(200).json({
+            success: true,
+            message:
+                "Appointment letter sent successfully" +
+                (emailSent ? " with email" : " (email pending/failed)"),
+            data: {
+                employeeId: employee._id,
+                appointmentLetter: employee.appointmentLetters,
+                emailSent,
+            },
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
-
-    // ✅ 4️⃣ Upload to S3
-    let appointmentUrl;
-    try {
-      appointmentUrl = await saveAppointmentLetterInS3(
-        pdfBuffer,
-        formattedEmployee.user.fullNameS3
-      );
-
-      // ✅ Save as OBJECT (not array)
-      employee.appointmentLetters = {
-        url: appointmentUrl,
-        fileName: `${formattedEmployee.user.fullNameS3}_AppointmentLetter_Kiaq.pdf`,
-        uploadedAt: new Date(),
-      };
-
-      await employee.save();
-
-    } catch (uploadError) {
-      console.error("S3 Upload Error:", uploadError);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to upload appointment letter",
-      });
-    }
-
-    // ✅ 5️⃣ Send Email
-    let emailSent = false;
-    try {
-      await sendAppointmentEmail(employee, pdfBuffer);
-      emailSent = true;
-    } catch (emailError) {
-      console.log("Email failed:", emailError);
-    }
-
-    // ✅ 6️⃣ Response
-    res.status(200).json({
-      success: true,
-      message:
-        "Appointment letter sent successfully" +
-        (emailSent ? " with email" : " (email pending/failed)"),
-      data: {
-        employeeId: employee._id,
-        appointmentLetter: employee.appointmentLetters,
-        emailSent,
-      },
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
 };
 
 
 export const verifyAppointmentLetter = async (req, res) => {
-  try {
-    const { employeeId } = req.body;
+    try {
+        const { employeeId } = req.body;
 
-    const employee = await Employee.findOne({ employeeId });
+        const employee = await Employee.findOne({ employeeId });
 
-    if (!employee || !employee.appointmentLetters?.url) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment letter not found",
-      });
+        if (!employee || !employee.appointmentLetters?.url) {
+            return res.status(404).json({
+                success: false,
+                message: "Appointment letter not found",
+            });
+        }
+
+        // ✅ Already signed check
+        if (employee.appointmentLetters.isVerified) {
+            return res.status(200).json({
+                success: true,
+                message: "Already signed",
+                data: employee.appointmentLetters,
+            });
+        }
+
+        // ✅ Mark as signed
+        employee.appointmentLetters.isVerified = true;
+        await employee.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Appointment letter signed successfully",
+            data: employee.appointmentLetters,
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
-
-    // ✅ Already signed check
-    if (employee.appointmentLetters.isVerified) {
-      return res.status(200).json({
-        success: true,
-        message: "Already signed",
-        data: employee.appointmentLetters,
-      });
-    }
-
-    // ✅ Mark as signed
-    employee.appointmentLetters.isVerified = true;
-    await employee.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Appointment letter signed successfully",
-      data: employee.appointmentLetters,
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
 };
 
 
@@ -1543,4 +1626,452 @@ export const getEmployeeFace = async (req, res) => {
       message: error.message
     });
   }
+}
+// Get all employees without pagination (HR/Admin only) - minimal fields
+export const getAllEmployeesAppointment = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only ADMIN or HR can view all employees'
+            });
+        }
+
+        const employees = await Employee.find({})
+            .select('firstName lastName officialEmail employeeId appointmentLetters isActive')
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Employees retrieved successfully',
+            data: {
+                employees,
+                total: employees.length
+            }
+        });
+    } catch (error) {
+        console.error('Get all employees minimal error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * GET /api/employees/resigned
+ * Returns all inactive (resigned) employees
+ */
+export const getResignedEmployees = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can view resigned employees' });
+        }
+
+        const employees = await Employee.find({ isActive: false })
+            .select('firstName lastName officialEmail employeeId designation department createdAt relievingDate resignationDate relievingLetter experienceCertificate isActive')
+            .sort({ updatedAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Resigned employees retrieved successfully',
+            data: { employees, total: employees.length },
+        });
+    } catch (error) {
+        console.error('Get resigned employees error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * POST /api/employees/:id/send-relieving-letter
+ * Generates PDF → uploads to S3 → sends Mailjet email with base64 attachment
+ */
+export const sendRelievingLetter = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can send relieving letters' });
+        }
+ 
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+ 
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: 'Employee not found' });
+        }
+ 
+        // Already sent — return existing record
+        if (employee.relievingLetter?.url) {
+            return res.status(200).json({
+                success: true,
+                message: 'Relieving letter was already sent previously',
+                data: { relievingLetter: employee.relievingLetter },
+            });
+        }
+ 
+        // ✅ Use manually entered form data from req.body
+        //    Fall back to buildEmployeeData() only for fields not provided
+        const fallback = buildEmployeeData(employee);
+        const empData = {
+            fullName:        req.body.fullName        || fallback.fullName,
+            employeeId:      req.body.employeeId      || fallback.employeeId,
+            designation:     req.body.designation     || fallback.designation,
+            department:      req.body.department      || fallback.department,
+            joiningDate:     req.body.joiningDate     || fallback.joiningDate,
+            leavingDate:     req.body.leavingDate     || fallback.leavingDate,
+            resignationDate: req.body.resignationDate || fallback.resignationDate,
+            letterDate:      req.body.letterDate      || fallback.letterDate,
+            refNo:           req.body.refNo           || fallback.refNo,
+            hrName:          req.body.hrName          || fallback.hrName,
+            hrTitle:         req.body.hrTitle         || fallback.hrTitle,
+        };
+ 
+        // 1. Generate PDF
+        const pdfBuffer = await generateRelievingLetter(empData);
+ 
+        // 2. Upload to S3
+        const fullName = `${employee.firstName}${employee.lastName}`;
+        const url      = await saveRelievingLetterInS3(pdfBuffer, fullName);
+        const fileName = `${fullName}_RelievingLetter_Kiaq.pdf`;
+ 
+        // 3. Save to DB
+        employee.relievingLetter = { url, fileName, sentAt: new Date() };
+        await employee.save();
+ 
+        // 4. Send Mailjet email
+        let emailSent = false;
+        try {
+            await SendMailJet({
+                to:      employee.personalEmail || employee.officialEmail,
+                subject: `Relieving Letter – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
+                html:    relievingLetterEmailTemplate(employee),
+                attachments: [{
+                    ContentType:   'application/pdf',
+                    Filename:      fileName,
+                    Base64Content: pdfBuffer.toString('base64'),
+                }],
+            });
+            emailSent = true;
+        } catch (emailErr) {
+            console.error('Relieving letter email error:', emailErr);
+        }
+ 
+        return res.status(200).json({
+            success: true,
+            message: `Relieving letter sent successfully${emailSent ? ' with email' : ' (email failed)'}`,
+            data: { relievingLetter: employee.relievingLetter, emailSent },
+        });
+    } catch (error) {
+        console.error('Send relieving letter error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+ 
+/**
+ * POST /api/employees/:id/send-experience-certificate
+ * Body: { fullName, employeeId, designation, department,
+ *         joiningDate, leavingDate, letterDate, refNo, hrName, hrTitle }
+ */
+export const sendExperienceCertificate = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can send experience certificates' });
+        }
+ 
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+ 
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: 'Employee not found' });
+        }
+ 
+        // Already sent — return existing record
+        if (employee.experienceCertificate?.url) {
+            return res.status(200).json({
+                success: true,
+                message: 'Experience certificate was already sent previously',
+                data: { experienceCertificate: employee.experienceCertificate },
+            });
+        }
+ 
+        // ✅ Use manually entered form data from req.body
+        const fallback = buildEmployeeData(employee);
+        const empData = {
+            fullName:    req.body.fullName    || fallback.fullName,
+            employeeId:  req.body.employeeId  || fallback.employeeId,
+            designation: req.body.designation || fallback.designation,
+            department:  req.body.department  || fallback.department,
+            joiningDate: req.body.joiningDate || fallback.joiningDate,
+            leavingDate: req.body.leavingDate || fallback.leavingDate,
+            letterDate:  req.body.letterDate  || fallback.letterDate,
+            refNo:       req.body.refNo       || fallback.refNo,
+            hrName:      req.body.hrName      || fallback.hrName,
+            hrTitle:     req.body.hrTitle     || fallback.hrTitle,
+        };
+ 
+        // 1. Generate PDF
+        const pdfBuffer = await generateExperienceCertificate(empData);
+ 
+        // 2. Upload to S3
+        const fullName = `${employee.firstName}${employee.lastName}`;
+        const url      = await saveExperienceCertificateInS3(pdfBuffer, fullName);
+        const fileName = `${fullName}_ExperienceCertificate_Kiaq.pdf`;
+ 
+        // 3. Save to DB
+        employee.experienceCertificate = { url, fileName, sentAt: new Date() };
+        await employee.save();
+ 
+        // 4. Send Mailjet email
+        let emailSent = false;
+        try {
+            await SendMailJet({
+                to:      employee.personalEmail || employee.officialEmail,
+                subject: `Experience Certificate – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
+                html:    experienceCertificateEmailTemplate(employee),
+                attachments: [{
+                    ContentType:   'application/pdf',
+                    Filename:      fileName,
+                    Base64Content: pdfBuffer.toString('base64'),
+                }],
+            });
+            emailSent = true;
+        } catch (emailErr) {
+            console.error('Experience certificate email error:', emailErr);
+        }
+ 
+        return res.status(200).json({
+            success: true,
+            message: `Experience certificate sent successfully${emailSent ? ' with email' : ' (email failed)'}`,
+            data: { experienceCertificate: employee.experienceCertificate, emailSent },
+        });
+    } catch (error) {
+        console.error('Send experience certificate error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/employees/:id/preview-relieving-letter
+ * Returns a 15-min signed S3 URL for in-browser preview
+ */
+export const previewRelievingLetter = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+        const employee = await Employee.findById(req.params.id);
+        if (!employee?.relievingLetter?.url) {
+            return res.status(404).json({ success: false, message: 'Relieving letter not found' });
+        }
+        const fileUrl = await getSignedS3Url(employee.relievingLetter.url);
+        return res.status(200).json({ success: true, fileUrl });
+    } catch (error) {
+        console.error('Preview relieving letter error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/employees/:id/preview-experience-certificate
+ */
+export const previewExperienceCertificate = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+        const employee = await Employee.findById(req.params.id);
+        if (!employee?.experienceCertificate?.url) {
+            return res.status(404).json({ success: false, message: 'Experience certificate not found' });
+        }
+        const fileUrl = await getSignedS3Url(employee.experienceCertificate.url);
+        return res.status(200).json({ success: true, fileUrl });
+    } catch (error) {
+        console.error('Preview experience certificate error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
+
+
+
+
+
+
+export const generateRelievingLetterDirect = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+ 
+        const {
+            fullName, employeeId, designation, department,
+            joiningDate, leavingDate, resignationDate,
+            letterDate, refNo, hrName, hrTitle,
+            sendEmail = false, recipientEmail,
+        } = req.body;
+ 
+        // Validate required fields
+        const missing = ['fullName', 'employeeId', 'designation', 'department',
+                         'joiningDate', 'leavingDate', 'resignationDate',
+                         'letterDate', 'refNo'].filter(f => !req.body[f]);
+        if (missing.length) {
+            return res.status(400).json({
+                success: false,
+                message: `Missing required fields: ${missing.join(', ')}`,
+            });
+        }
+ 
+        const empData = {
+            fullName, employeeId, designation, department,
+            joiningDate, leavingDate, resignationDate,
+            letterDate, refNo,
+            hrName:  hrName  || process.env.HR_NAME  || 'Hazeena Begum A',
+            hrTitle: hrTitle || process.env.HR_TITLE || 'SR Executive - Human Resource',
+        };
+ 
+        const pdfBuffer = await generateRelievingLetter(empData);
+        const fileName  = `${fullName.replace(/\s+/g, '')}_RelievingLetter_Kiaq.pdf`;
+ 
+        // Optional email
+        if (sendEmail && recipientEmail) {
+            try {
+                await SendMailJet({
+                    to:      recipientEmail,
+                    subject: `Relieving Letter – ${fullName} | ${process.env.COMPANY_NAME}`,
+                    html:    relievingLetterEmailTemplate({ firstName: fullName.split(' ')[0], lastName: '', ...empData }),
+                    attachments: [{
+                        ContentType:   'application/pdf',
+                        Filename:      fileName,
+                        Base64Content: pdfBuffer.toString('base64'),
+                    }],
+                });
+            } catch (emailErr) {
+                console.error('Direct relieving email error:', emailErr);
+            }
+        }
+ 
+        // Stream PDF back as download
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        return res.send(pdfBuffer);
+ 
+    } catch (error) {
+        console.error('Generate relieving letter direct error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+ 
+ 
+/**
+ * POST /api/employees/generate-experience-certificate
+ * Body: { fullName, employeeId, designation, department,
+ *         joiningDate, leavingDate,
+ *         letterDate, refNo, hrName, hrTitle }
+ *
+ * Returns the PDF as a downloadable file stream.
+ */
+export const generateExperienceCertificateDirect = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+ 
+        const {
+            fullName, employeeId, designation, department,
+            joiningDate, leavingDate,
+            letterDate, refNo, hrName, hrTitle,
+            sendEmail = false, recipientEmail,
+        } = req.body;
+ 
+        const missing = ['fullName', 'employeeId', 'designation', 'department',
+                         'joiningDate', 'leavingDate', 'letterDate', 'refNo'].filter(f => !req.body[f]);
+        if (missing.length) {
+            return res.status(400).json({
+                success: false,
+                message: `Missing required fields: ${missing.join(', ')}`,
+            });
+        }
+ 
+        const empData = {
+            fullName, employeeId, designation, department,
+            joiningDate, leavingDate,
+            letterDate, refNo,
+            hrName:  hrName  || process.env.HR_NAME  || 'Hazeena Begum A',
+            hrTitle: hrTitle || process.env.HR_TITLE || 'SR Executive - Human Resource',
+        };
+ 
+        const pdfBuffer = await generateExperienceCertificate(empData);
+        const fileName  = `${fullName.replace(/\s+/g, '')}_ExperienceCertificate_Kiaq.pdf`;
+ 
+        // Optional email
+        if (sendEmail && recipientEmail) {
+            try {
+                await SendMailJet({
+                    to:      recipientEmail,
+                    subject: `Experience Certificate – ${fullName} | ${process.env.COMPANY_NAME}`,
+                    html:    experienceCertificateEmailTemplate({ firstName: fullName.split(' ')[0], lastName: '', ...empData }),
+                    attachments: [{
+                        ContentType:   'application/pdf',
+                        Filename:      fileName,
+                        Base64Content: pdfBuffer.toString('base64'),
+                    }],
+                });
+            } catch (emailErr) {
+                console.error('Direct experience email error:', emailErr);
+            }
+        }
+ 
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        return res.send(pdfBuffer);
+ 
+    } catch (error) {
+        console.error('Generate experience certificate direct error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
 };

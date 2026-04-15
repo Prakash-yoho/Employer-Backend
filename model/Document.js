@@ -55,6 +55,7 @@ const experienceDocumentSchema = new Schema({
         trim: true
     },
     experienceCertificate: documentFieldSchema,
+    sixmonthstatement:documentFieldSchema,
     relievingCertificate: documentFieldSchema,
     payslips: [documentFieldSchema], // Array for multiple payslips (last 6 months)
     appointmentLetter: documentFieldSchema
@@ -92,7 +93,10 @@ const documentSchema = new Schema({
         type: documentFieldSchema,
         default: () => ({})
     },
-
+    eleventhCertificate: {
+        type: documentFieldSchema,
+        default: () => ({})
+    },
     twelfthCertificate: {
         type: documentFieldSchema,
         default: () => ({})
@@ -130,6 +134,14 @@ const documentSchema = new Schema({
     },
 
     consolidatedCertificate: {
+        type: documentFieldSchema,
+        default: () => ({})
+    },
+    pgconsolidatedCertificate: {
+        type: documentFieldSchema,
+        default: () => ({})
+    },
+    diplomaconsolidatedCertificate: {
         type: documentFieldSchema,
         default: () => ({})
     },
@@ -227,12 +239,12 @@ documentSchema.pre('save', async function (next) {
     try {
         // Count all document fields
         const mandatoryFields = [
-            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate',
+            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate','eleventhCertificate',
             'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter'
         ];
 
         const optionalFields = [
-            'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate',
+            'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate','pgconsolidatedCertificate','diplomaconsolidatedCertificate',
             'diplomaCertificate', 'pgCertificate'
         ];
 
@@ -285,7 +297,7 @@ documentSchema.pre('save', async function (next) {
             this.experienceDocuments.forEach(exp => {
                 if (exp) {
                     // Count each document field in experience
-                    const expFields = ['experienceCertificate', 'relievingCertificate', 'appointmentLetter'];
+                    const expFields = ['experienceCertificate', 'relievingCertificate', 'sixmonthstatement', 'appointmentLetter'];
                     expFields.forEach(field => {
                         if (exp[field] && exp[field].status && exp[field].status !== 'pending') {
                             totalDocuments++;
