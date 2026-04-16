@@ -79,6 +79,7 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/leaves', leaveRoutes)
+app.use("/api/admin/attendance", attendanceRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use('/api/employer/dashboard', dashboardHRAdminRoutes);
 app.use('/api/it-dashboard', itDashboardRoutes);

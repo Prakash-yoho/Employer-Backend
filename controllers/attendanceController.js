@@ -323,3 +323,349 @@ export const getAttendanceLogImages = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
+
+
+
+
+
+
+
+
+
+// attentance employee details get in hr panel
+
+
+
+// ─── Helper: Sign a single S3 URL ────────────────────────────────────────────
+const signUrl = async (url) => {
+  if (!url) return null;
+  try {
+    let s3Key = url.split(".amazonaws.com/")[1];
+    if (s3Key?.includes("?")) s3Key = s3Key.split("?")[0];
+    const cmd = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
+    return await getSignedUrl(s3, cmd, { expiresIn: 300 });
+  } catch {
+    return null;
+  }
+};
+ 
+// ─── Helper: Format duration in minutes between two time strings ──────────────
+const calcDurationMinutes = (start, end) => {
+  if (!start || !end) return null;
+  const toMinutes = (t) => {
+    const [time, period] = t.split(" ");
+    let [h, m, s] = time.split(":").map(Number);
+    if (period === "PM" && h !== 12) h += 12;
+    if (period === "AM" && h === 12) h = 0;
+    return h * 60 + m + (s || 0) / 60;
+  };
+  return Math.round(toMinutes(end) - toMinutes(start));
+};
+ 
+// ─── GET /api/admin/attendance ────────────────────────────────────────────────
+// Returns paginated list of all employees with their latest attendance summary
+export const getAllEmployeesAttendance = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      date,
+      search,
+      status, // "present" | "absent" | "late"
+    } = req.query;
+ 
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+ 
+    // Build match filter
+    const matchFilter = {};
+    if (date) matchFilter.date = date;
+ 
+    // Aggregate: group by employeeId, get latest record per employee
+    const pipeline = [
+      { $match: matchFilter },
+      { $sort: { date: -1, createdAt: -1 } },
+      {
+        $group: {
+          _id: "$employeeId",
+          latestRecord: { $first: "$$ROOT" },
+          totalDays: { $sum: 1 },
+          presentDays: {
+            $sum: { $cond: [{ $ifNull: ["$clockIn", false] }, 1, 0] },
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: "employees", // your employees collection name
+          localField: "_id",
+          foreignField: "employeeId",
+          as: "employeeInfo",
+        },
+      },
+      { $unwind: { path: "$employeeInfo", preserveNullAndEmptyArrays: true } },
+    ];
+ 
+    // Search filter by name/email
+    if (search) {
+      pipeline.push({
+        $match: {
+          $or: [
+            {
+              "employeeInfo.name": {
+                $regex: search,
+                $options: "i",
+              },
+            },
+            {
+              "employeeInfo.email": {
+                $regex: search,
+                $options: "i",
+              },
+            },
+            { _id: { $regex: search, $options: "i" } },
+          ],
+        },
+      });
+    }
+ 
+    // Count total before pagination
+    const countPipeline = [...pipeline, { $count: "total" }];
+    const countResult = await Attendance.aggregate(countPipeline);
+    const total = countResult[0]?.total || 0;
+ 
+    // Add pagination
+    pipeline.push({ $skip: skip });
+    pipeline.push({ $limit: parseInt(limit) });
+ 
+    const records = await Attendance.aggregate(pipeline);
+ 
+    const data = records.map((r) => {
+      const rec = r.latestRecord;
+      const emp = r.employeeInfo || {};
+ 
+      // Determine status
+      let attendanceStatus = "Absent";
+      if (rec?.clockIn) {
+        const [time, period] = rec.clockIn.split(" ");
+        const [h] = time.split(":").map(Number);
+        const hour24 = period === "PM" && h !== 12 ? h + 12 : h;
+        attendanceStatus = hour24 >= 9.5 ? "Late" : "Present"; // after 10 AM = late
+      }
+ 
+      return {
+        employeeId: r._id,
+        name: `${emp.firstName} ${emp.lastName}` || r._id,
+        email: emp.officialEmail || "",
+        department: emp.department || "",
+        designation: emp.designation || "",
+        avatar: emp.avatar || null,
+        latestDate: rec?.date || null,
+        clockIn: rec?.clockIn || null,
+        clockOut: rec?.clockOut || null,
+        status: attendanceStatus,
+        totalBreaks: rec?.breaks?.length || 0,
+        hasActiveBreak: rec?.breaks?.some((b) => b.start && !b.end) || false,
+        totalDays: r.totalDays,
+        presentDays: r.presentDays,
+      };
+    });
+ 
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / parseInt(limit)),
+        hasPrev: parseInt(page) > 1,
+        hasNext: parseInt(page) < Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (err) {
+    console.error("getAllEmployeesAttendance Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+ 
+// ─── GET /api/admin/attendance/:employeeId ─────────────────────────────────────
+// Returns paginated attendance logs for a specific employee
+export const getEmployeeAttendanceLogs = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { page = 1, limit = 10, month, year } = req.query;
+ 
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const filter = { employeeId };
+ 
+    // Filter by month/year if provided
+    if (month && year) {
+      const paddedMonth = String(month).padStart(2, "0");
+      filter.date = {
+        $regex: `^${year}-${paddedMonth}`,
+      };
+    } else if (year) {
+      filter.date = { $regex: `^${year}` };
+    }
+ 
+    const total = await Attendance.countDocuments(filter);
+    const logs = await Attendance.find(filter)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+ 
+    // Calculate work duration per log
+    const enrichedLogs = logs.map((log) => {
+      const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
+      const totalBreakMinutes = log.breaks.reduce((acc, b) => {
+        const dur = calcDurationMinutes(b.start, b.end);
+        return acc + (dur || 0);
+      }, 0);
+ 
+      return {
+        _id: log._id,
+        date: log.date,
+        clockIn: log.clockIn,
+        clockOut: log.clockOut || null,
+        clockInLocation: log.clockInLocation,
+        clockOutLocation: log.clockOutLocation,
+        breaks: log.breaks.map((b) => ({
+          start: b.start,
+          end: b.end || null,
+          startLocation: b.startLocation,
+          endLocation: b.endLocation,
+          duration: calcDurationMinutes(b.start, b.end),
+        })),
+        totalBreaks: log.breaks.length,
+        workDurationMinutes: workMinutes,
+        breakDurationMinutes: totalBreakMinutes,
+        netWorkMinutes:
+          workMinutes != null ? workMinutes - totalBreakMinutes : null,
+        status: log.clockOut
+          ? "Completed"
+          : log.clockIn
+            ? "Active"
+            : "Absent",
+      };
+    });
+ 
+    return res.status(200).json({
+      success: true,
+      employeeId,
+      data: enrichedLogs,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / parseInt(limit)),
+        hasPrev: parseInt(page) > 1,
+        hasNext: parseInt(page) < Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (err) {
+    console.error("getEmployeeAttendanceLogs Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+ 
+// ─── GET /api/admin/attendance/:employeeId/log/:logId ─────────────────────────
+// Returns a single detailed attendance log with signed image URLs
+export const getEmployeeLogDetail = async (req, res) => {
+  try {
+    const { logId } = req.params;
+ 
+    const log = await Attendance.findById(logId);
+    if (!log) {
+      return res.status(404).json({ error: "Attendance log not found" });
+    }
+ 
+    // Sign all images in parallel
+    const [clockInSigned, clockOutSigned] = await Promise.all([
+      signUrl(log.clockInImage),
+      signUrl(log.clockOutImage),
+    ]);
+ 
+    const breaksSigned = await Promise.all(
+      log.breaks.map(async (b) => ({
+        start: b.start,
+        end: b.end || null,
+        startLocation: b.startLocation,
+        endLocation: b.endLocation,
+        startImage: await signUrl(b.startImage),
+        endImage: await signUrl(b.endImage),
+        duration: calcDurationMinutes(b.start, b.end),
+      }))
+    );
+ 
+    const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
+    const totalBreakMinutes = breaksSigned.reduce(
+      (acc, b) => acc + (b.duration || 0),
+      0
+    );
+ 
+    return res.status(200).json({
+      success: true,
+      data: {
+        _id: log._id,
+        employeeId: log.employeeId,
+        date: log.date,
+        clockIn: log.clockIn,
+        clockOut: log.clockOut || null,
+        clockInImage: clockInSigned,
+        clockOutImage: clockOutSigned,
+        clockInLocation: log.clockInLocation,
+        clockOutLocation: log.clockOutLocation,
+        breaks: breaksSigned,
+        totalBreaks: log.breaks.length,
+        workDurationMinutes: workMinutes,
+        breakDurationMinutes: totalBreakMinutes,
+        netWorkMinutes:
+          workMinutes != null ? workMinutes - totalBreakMinutes : null,
+        status: log.clockOut
+          ? "Completed"
+          : log.clockIn
+            ? "Active"
+            : "Absent",
+      },
+      expiresIn: 300,
+    });
+  } catch (err) {
+    console.error("getEmployeeLogDetail Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+ 
+// ─── GET /api/admin/attendance/summary ────────────────────────────────────────
+// Returns today's overall attendance summary stats
+export const getAttendanceSummary = async (req, res) => {
+  try {
+    const { date } = req.query;
+    const targetDate = date || new Date().toISOString().split("T")[0];
+ 
+    const todayLogs = await Attendance.find({ date: targetDate });
+ 
+    const present = todayLogs.filter((l) => l.clockIn).length;
+    const completed = todayLogs.filter((l) => l.clockIn && l.clockOut).length;
+    const active = todayLogs.filter((l) => l.clockIn && !l.clockOut).length;
+    const onBreak = todayLogs.filter((l) =>
+      l.breaks?.some((b) => b.start && !b.end)
+    ).length;
+ 
+    return res.status(200).json({
+      success: true,
+      date: targetDate,
+      summary: {
+        total: todayLogs.length,
+        present,
+        completed,
+        active,
+        onBreak,
+        absent: 0, // Can be calculated if you have total employee count
+      },
+    });
+  } catch (err) {
+    console.error("getAttendanceSummary Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+ 
