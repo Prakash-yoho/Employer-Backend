@@ -127,6 +127,10 @@ const documentSchema = new Schema({
         type: documentFieldSchema,
         default: () => ({})
     },
+    interviewresume: {
+        type: documentFieldSchema,
+        default: () => ({})
+    },
 
     birthCertificate: {
         type: documentFieldSchema,
@@ -240,7 +244,7 @@ documentSchema.pre('save', async function (next) {
         // Count all document fields
         const mandatoryFields = [
             'aadharCard', 'panCard', 'addressProof', 'tenthCertificate','eleventhCertificate',
-            'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter'
+            'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter','interviewresume'
         ];
 
         const optionalFields = [

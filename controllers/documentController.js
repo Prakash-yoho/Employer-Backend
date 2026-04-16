@@ -118,7 +118,7 @@ export const uploadDocument = async (req, res) => {
             'aadharCard', 'panCard', 'addressProof', 'tenthCertificate','eleventhCertificate',
             'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter',
             'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate','pgconsolidatedCertificate','diplomaconsolidatedCertificate',
-            'diplomaCertificate', 'pgCertificate', 'trainingCertificates'
+            'diplomaCertificate', 'pgCertificate', 'trainingCertificates','interviewresume'
         ];
 
         const validExperienceSubTypes = [
@@ -1053,6 +1053,7 @@ export const previewDocument = async (req, res) => {
                 panCard: 'panCard',
                 drivingLicense: 'drivingLicense',
                 passport: 'passport',
+                interviewresume:'interviewresume',
                 addressProof: 'addressProof',
                 birthCertificate: 'birthCertificate',
                 tenthCertificate: 'tenthCertificate',
@@ -1194,6 +1195,7 @@ export const downloadDocument = async (req, res) => {
                 panCard: "panCard",
                 drivingLicense: "drivingLicense",
                 passport: "passport",
+                interviewresume: "interviewresume",
                 addressProof: "addressProof",
                 birthCertificate: "birthCertificate",
                 tenthCertificate: "tenthCertificate",
