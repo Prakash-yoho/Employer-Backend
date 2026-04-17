@@ -3,6 +3,7 @@ import { PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from '../config/s3.js';
 import { v4 as uuidv4 } from "uuid";
+import Employee from '../model/Employee.js';
 
 const bucketName = process.env.AWS_S3_BUCKET;
 
@@ -28,8 +29,9 @@ async function uploadImage(base64Image, folder = "attendance") {
     })
   );
 
-const REGION = "ap-south-2";
-return `https://${bucketName}.s3.${REGION}.amazonaws.com/${fileName}`;}
+  const REGION = "ap-south-2";
+  return `https://${bucketName}.s3.${REGION}.amazonaws.com/${fileName}`;
+}
 
 // Parse location safely
 function parseLocation(location) {
@@ -255,14 +257,14 @@ export const getAttendanceImageUrl = async (req, res) => {
 
     const command = new GetObjectCommand({
       Bucket: bucketName,
-      Key:    s3Key,
+      Key: s3Key,
       ResponseContentType: "image/jpeg",
     });
 
     const signedUrl = await getSignedUrl(s3, command, { expiresIn: 60 * 5 }); // 5 min
 
     return res.status(200).json({
-      success:   true,
+      success: true,
       signedUrl,
       expiresIn: 300,
     });
@@ -301,22 +303,22 @@ export const getAttendanceLogImages = async (req, res) => {
 
     const breaksSigned = await Promise.all(
       log.breaks.map(async (b) => ({
-        start:      b.start,
-        end:        b.end,
+        start: b.start,
+        end: b.end,
         startImage: await sign(b.startImage),
-        endImage:   await sign(b.endImage),
+        endImage: await sign(b.endImage),
       }))
     );
 
     return res.status(200).json({
-      success:     true,
-      date:        log.date,
-      clockIn:     log.clockIn,
-      clockOut:    log.clockOut,
-      clockInImage:  clockInSigned,
+      success: true,
+      date: log.date,
+      clockIn: log.clockIn,
+      clockOut: log.clockOut,
+      clockInImage: clockInSigned,
       clockOutImage: clockOutSigned,
-      breaks:      breaksSigned,
-      expiresIn:   300,
+      breaks: breaksSigned,
+      expiresIn: 300,
     });
   } catch (err) {
     console.error("Get Log Images Error:", err);
@@ -348,7 +350,7 @@ const signUrl = async (url) => {
     return null;
   }
 };
- 
+
 // ─── Helper: Format duration in minutes between two time strings ──────────────
 const calcDurationMinutes = (start, end) => {
   if (!start || !end) return null;
@@ -361,115 +363,138 @@ const calcDurationMinutes = (start, end) => {
   };
   return Math.round(toMinutes(end) - toMinutes(start));
 };
- 
+
 // ─── GET /api/admin/attendance ────────────────────────────────────────────────
 // Returns paginated list of all employees with their latest attendance summary
 export const getAllEmployeesAttendance = async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 10,
-      date,
-      search,
-      status, // "present" | "absent" | "late"
-    } = req.query;
- 
+    const { page = 1, limit = 10, date, search, status } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
- 
-    // Build match filter
-    const matchFilter = {};
-    if (date) matchFilter.date = date;
- 
-    // Aggregate: group by employeeId, get latest record per employee
+    const targetDate = date || new Date().toISOString().split("T")[0];
+
+    // Build employee search filter
+    const employeeMatch = {};
+    if (search) {
+      employeeMatch.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { employeeId: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Pipeline starting from Employee collection
     const pipeline = [
-      { $match: matchFilter },
-      { $sort: { date: -1, createdAt: -1 } },
+      { $match: { isActive: true, ...employeeMatch } },
       {
-        $group: {
-          _id: "$employeeId",
-          latestRecord: { $first: "$$ROOT" },
-          totalDays: { $sum: 1 },
-          presentDays: {
-            $sum: { $cond: [{ $ifNull: ["$clockIn", false] }, 1, 0] },
+        $lookup: {
+          from: "attendances", // your attendance collection name
+          let: { empId: "$employeeId" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$employeeId", "$$empId"] },
+                    { $eq: ["$date", targetDate] },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "todayAttendance",
+        },
+      },
+      {
+        $addFields: {
+          attendanceRecord: { $arrayElemAt: ["$todayAttendance", 0] },
+        },
+      },
+      {
+        $addFields: {
+          clockIn: { $ifNull: ["$attendanceRecord.clockIn", null] },
+          clockOut: { $ifNull: ["$attendanceRecord.clockOut", null] },
+          breaks: { $ifNull: ["$attendanceRecord.breaks", []] },
+          hasRecord: { $cond: [{ $ifNull: ["$attendanceRecord", false] }, true, false] },
+        },
+      },
+      {
+        $addFields: {
+          attendanceStatus: {
+            $cond: [
+              { $ifNull: ["$clockIn", false] },
+              {
+                $let: {
+                  vars: {
+                    parts: { $split: ["$clockIn", " "] },
+                  },
+                  in: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $eq: [{ $arrayElemAt: ["$$parts", 1] }, "PM"] },
+                          { $gte: [{ $toInt: { $arrayElemAt: [{ $split: [{ $arrayElemAt: ["$$parts", 0] }, ":"] }, 0] } }, 10] },
+                        ],
+                      },
+                      "Late",
+                      "Present",
+                    ],
+                  },
+                },
+              },
+              "Absent",
+            ],
+          },
+          totalBreaks: { $size: { $ifNull: ["$attendanceRecord.breaks", []] } },
+          hasActiveBreak: {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$attendanceRecord.breaks", []] },
+                    as: "b",
+                    cond: { $and: [{ $ifNull: ["$$b.start", false] }, { $not: { $ifNull: ["$$b.end", false] } }] },
+                  },
+                },
+              },
+              0,
+            ],
           },
         },
       },
-      {
-        $lookup: {
-          from: "employees", // your employees collection name
-          localField: "_id",
-          foreignField: "employeeId",
-          as: "employeeInfo",
-        },
-      },
-      { $unwind: { path: "$employeeInfo", preserveNullAndEmptyArrays: true } },
     ];
- 
-    // Search filter by name/email
-    if (search) {
-      pipeline.push({
-        $match: {
-          $or: [
-            {
-              "employeeInfo.name": {
-                $regex: search,
-                $options: "i",
-              },
-            },
-            {
-              "employeeInfo.email": {
-                $regex: search,
-                $options: "i",
-              },
-            },
-            { _id: { $regex: search, $options: "i" } },
-          ],
-        },
-      });
+
+    // Status filter
+    if (status && status !== "all") {
+      pipeline.push({ $match: { attendanceStatus: { $regex: status, $options: "i" } } });
     }
- 
-    // Count total before pagination
+
+    // Count
     const countPipeline = [...pipeline, { $count: "total" }];
-    const countResult = await Attendance.aggregate(countPipeline);
+    const countResult = await Employee.aggregate(countPipeline); // ← import Employee model
     const total = countResult[0]?.total || 0;
- 
-    // Add pagination
+
     pipeline.push({ $skip: skip });
     pipeline.push({ $limit: parseInt(limit) });
- 
-    const records = await Attendance.aggregate(pipeline);
- 
-    const data = records.map((r) => {
-      const rec = r.latestRecord;
-      const emp = r.employeeInfo || {};
- 
-      // Determine status
-      let attendanceStatus = "Absent";
-      if (rec?.clockIn) {
-        const [time, period] = rec.clockIn.split(" ");
-        const [h] = time.split(":").map(Number);
-        const hour24 = period === "PM" && h !== 12 ? h + 12 : h;
-        attendanceStatus = hour24 >= 9.5 ? "Late" : "Present"; // after 10 AM = late
-      }
- 
-      return {
-        employeeId: r._id,
-        name: `${emp.firstName} ${emp.lastName}` || r._id,
-        email: emp.officialEmail || "",
-        department: emp.department || "",
-        designation: emp.designation || "",
-        avatar: emp.avatar || null,
-        latestDate: rec?.date || null,
-        clockIn: rec?.clockIn || null,
-        clockOut: rec?.clockOut || null,
-        status: attendanceStatus,
-        totalBreaks: rec?.breaks?.length || 0,
-        hasActiveBreak: rec?.breaks?.some((b) => b.start && !b.end) || false,
-        totalDays: r.totalDays,
-        presentDays: r.presentDays,
-      };
-    });
- 
+
+    const records = await Employee.aggregate(pipeline);
+
+    const data = records.map((emp) => ({
+      employeeId: emp.employeeId,
+      name: `${emp.firstName} ${emp.lastName}` || emp.employeeId,
+      email: emp.officialEmail || "",
+      department: emp.department || "",
+      designation: emp.designation || "",
+      avatar: emp.avatar || null,
+      latestDate: targetDate,
+      clockIn: emp.clockIn,
+      clockOut: emp.clockOut,
+      status: emp.attendanceStatus,
+      totalBreaks: emp.totalBreaks,
+      hasActiveBreak: emp.hasActiveBreak,
+      totalDays: 0,
+      presentDays: 0,
+    }));
+
     return res.status(200).json({
       success: true,
       data,
@@ -487,17 +512,17 @@ export const getAllEmployeesAttendance = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
- 
+
 // ─── GET /api/admin/attendance/:employeeId ─────────────────────────────────────
 // Returns paginated attendance logs for a specific employee
 export const getEmployeeAttendanceLogs = async (req, res) => {
   try {
     const { employeeId } = req.params;
-    const { page = 1, limit = 10, month, year } = req.query;
- 
+    const { page = 1, limit = 20, month, year } = req.query;
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const filter = { employeeId };
- 
+
     // Filter by month/year if provided
     if (month && year) {
       const paddedMonth = String(month).padStart(2, "0");
@@ -507,13 +532,13 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
     } else if (year) {
       filter.date = { $regex: `^${year}` };
     }
- 
+
     const total = await Attendance.countDocuments(filter);
     const logs = await Attendance.find(filter)
       .sort({ date: -1 })
       .skip(skip)
       .limit(parseInt(limit));
- 
+
     // Calculate work duration per log
     const enrichedLogs = logs.map((log) => {
       const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
@@ -521,7 +546,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
         const dur = calcDurationMinutes(b.start, b.end);
         return acc + (dur || 0);
       }, 0);
- 
+
       return {
         _id: log._id,
         date: log.date,
@@ -548,7 +573,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
             : "Absent",
       };
     });
- 
+
     return res.status(200).json({
       success: true,
       employeeId,
@@ -567,24 +592,24 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
- 
+
 // ─── GET /api/admin/attendance/:employeeId/log/:logId ─────────────────────────
 // Returns a single detailed attendance log with signed image URLs
 export const getEmployeeLogDetail = async (req, res) => {
   try {
     const { logId } = req.params;
- 
+
     const log = await Attendance.findById(logId);
     if (!log) {
       return res.status(404).json({ error: "Attendance log not found" });
     }
- 
+
     // Sign all images in parallel
     const [clockInSigned, clockOutSigned] = await Promise.all([
       signUrl(log.clockInImage),
       signUrl(log.clockOutImage),
     ]);
- 
+
     const breaksSigned = await Promise.all(
       log.breaks.map(async (b) => ({
         start: b.start,
@@ -596,13 +621,13 @@ export const getEmployeeLogDetail = async (req, res) => {
         duration: calcDurationMinutes(b.start, b.end),
       }))
     );
- 
+
     const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
     const totalBreakMinutes = breaksSigned.reduce(
       (acc, b) => acc + (b.duration || 0),
       0
     );
- 
+
     return res.status(200).json({
       success: true,
       data: {
@@ -634,33 +659,36 @@ export const getEmployeeLogDetail = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
- 
+
 // ─── GET /api/admin/attendance/summary ────────────────────────────────────────
 // Returns today's overall attendance summary stats
 export const getAttendanceSummary = async (req, res) => {
   try {
     const { date } = req.query;
     const targetDate = date || new Date().toISOString().split("T")[0];
- 
-    const todayLogs = await Attendance.find({ date: targetDate });
- 
+
+    const [todayLogs, totalEmployees] = await Promise.all([
+      Attendance.find({ date: targetDate }),
+      Employee.countDocuments({ isActive: true }),  // ← add this
+    ]);
+
     const present = todayLogs.filter((l) => l.clockIn).length;
     const completed = todayLogs.filter((l) => l.clockIn && l.clockOut).length;
     const active = todayLogs.filter((l) => l.clockIn && !l.clockOut).length;
     const onBreak = todayLogs.filter((l) =>
       l.breaks?.some((b) => b.start && !b.end)
     ).length;
- 
+
     return res.status(200).json({
       success: true,
       date: targetDate,
       summary: {
-        total: todayLogs.length,
+        total: totalEmployees,          // ← total active employees, not just logs
         present,
         completed,
         active,
         onBreak,
-        absent: 0, // Can be calculated if you have total employee count
+        absent: totalEmployees - present,  // ← real absent count
       },
     });
   } catch (err) {
@@ -668,4 +696,3 @@ export const getAttendanceSummary = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
- 
