@@ -354,14 +354,25 @@ const signUrl = async (url) => {
 // ─── Helper: Format duration in minutes between two time strings ──────────────
 const calcDurationMinutes = (start, end) => {
   if (!start || !end) return null;
-  const toMinutes = (t) => {
-    const [time, period] = t.split(" ");
+
+  const toSeconds = (t) => {
+    const [time, periodRaw] = t.trim().split(" ");
+    const period = periodRaw.toUpperCase(); // AM / PM
+
     let [h, m, s] = time.split(":").map(Number);
+
     if (period === "PM" && h !== 12) h += 12;
     if (period === "AM" && h === 12) h = 0;
-    return h * 60 + m + (s || 0) / 60;
+
+    return h * 3600 + m * 60 + (s || 0);
   };
-  return Math.round(toMinutes(end) - toMinutes(start));
+
+  let diffSeconds = toSeconds(end) - toSeconds(start);
+
+  // handle overnight shift (optional safety)
+  if (diffSeconds < 0) diffSeconds += 24 * 3600;
+
+  return Math.round(diffSeconds / 60);
 };
 
 // ─── GET /api/admin/attendance ────────────────────────────────────────────────
@@ -428,39 +439,61 @@ export const getAllEmployeesAttendance = async (req, res) => {
                     parts: { $split: ["$clockIn", " "] },
                   },
                   in: {
-                    $cond: [
-                      {
-                        $and: [
-                          { $eq: [{ $arrayElemAt: ["$$parts", 1] }, "PM"] },
-                          { $gte: [{ $toInt: { $arrayElemAt: [{ $split: [{ $arrayElemAt: ["$$parts", 0] }, ":"] }, 0] } }, 10] },
-                        ],
+                    $let: {
+                      vars: {
+                        period: { $arrayElemAt: ["$$parts", 1] },
+                        timeParts: { $split: [{ $arrayElemAt: ["$$parts", 0] }, ":"] },
                       },
-                      "Late",
-                      "Present",
-                    ],
+                      in: {
+                        $let: {
+                          vars: {
+                            hour: { $toInt: { $arrayElemAt: ["$$timeParts", 0] } },
+                            minute: { $toInt: { $arrayElemAt: ["$$timeParts", 1] } },
+                          },
+                          in: {
+                            $cond: [
+                              // Must be AM to possibly be on time
+                              { $eq: ["$$period", "AM"] },
+                              {
+                                $cond: [
+                                  // Before 9 AM → Present (very early)
+                                  { $lt: ["$$hour", 9] },
+                                  "Present",
+                                  {
+                                    $cond: [
+                                      // Exactly 9 AM hour → check minutes
+                                      { $eq: ["$$hour", 9] },
+                                      {
+                                        $cond: [
+                                          // 9:00 - 9:35 → Present (within grace)
+                                          { $lte: ["$$minute", 35] },
+                                          "Present",
+                                          // 9:36+ AM → Late
+                                          "Late",
+                                        ],
+                                      },
+                                      // 10 AM, 11 AM → Late
+                                      "Late",
+                                    ],
+                                  },
+                                ],
+                              },
+                              // PM clock-in → always Late (office starts 9:30 AM)
+                              "Late",
+                            ],
+                          },
+                        },
+                      },
+                    },
                   },
                 },
               },
+              // No clockIn → Absent
               "Absent",
             ],
           },
-          totalBreaks: { $size: { $ifNull: ["$attendanceRecord.breaks", []] } },
-          hasActiveBreak: {
-            $gt: [
-              {
-                $size: {
-                  $filter: {
-                    input: { $ifNull: ["$attendanceRecord.breaks", []] },
-                    as: "b",
-                    cond: { $and: [{ $ifNull: ["$$b.start", false] }, { $not: { $ifNull: ["$$b.end", false] } }] },
-                  },
-                },
-              },
-              0,
-            ],
-          },
         },
-      },
+      }
     ];
 
     // Status filter

@@ -325,7 +325,7 @@ export const newEmployeeTemplate = (employee, officialPassword) => {
         <div class="section-title">Login Credentials</div>
         <div class="credentials">
           <div><strong>Official Email:</strong> ${employee.officialEmail}</div>
-          <div><strong>Temporary Password:</strong> ${officialPassword}</div>
+          <div><strong>Official Password:</strong> ${officialPassword}</div>
         </div>
       </div>
 
