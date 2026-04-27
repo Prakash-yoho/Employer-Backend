@@ -315,7 +315,7 @@ export const employeeLogin = async (req, res) => {
 // Get employee profile
 export const getEmployeeProfile = async (req, res) => {
     try {
-        const employee = await Employee.findById(req.user._id).select('-officialPassword -createdBy');
+        const employee = await Employee.findById(req.user._id).select('-officialPassword -createdBy -annualSalary -isPermanentEmp');
 
         if (!employee) {
             return res.status(404).json({
@@ -371,7 +371,7 @@ export const updateEmployeeProfile = async (req, res) => {
         }
 
         // Check if trying to update restricted fields
-        const restrictedFields = ['employeeId', 'officialEmail', 'role', 'createdBy', 'designation', 'department', 'isActive'];
+        const restrictedFields = ['employeeId', 'officialEmail', 'role', 'createdBy', 'designation', 'department', 'isActive','isPermanentEmp', 'annualSalary'];
         const restrictedUpdate = Object.keys(value).some(field => restrictedFields.includes(field));
 
         if (restrictedUpdate) {

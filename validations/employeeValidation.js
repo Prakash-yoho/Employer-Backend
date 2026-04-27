@@ -31,6 +31,20 @@ export const createEmployeeSchema = Joi.object({
             'string.max': 'Last name cannot exceed 50 characters'
         }),
 
+    // In createEmployeeSchema:
+    annualSalary: Joi.number()
+        .min(0)
+        .allow(null, "")
+        .optional()
+        .messages({
+            "number.base": "Annual salary must be a number",
+            "number.min": "Annual salary cannot be negative",
+        }),
+
+    isPermanentEmp: Joi.boolean()
+        .default(false)
+        .optional(),
+
     officialEmail: Joi.string()
         .email()
         .required()
@@ -194,6 +208,24 @@ export const updateEmployeeProfileSchema = Joi.object({
         .pattern(/^\d{12}$/)
         .messages({
             'string.pattern.base': 'Invalid Aadhaar number'
+        }),
+
+    // In employeeValidation.js — updateEmployeeByAdminSchema
+    // Find the annualSalary and isPermanentEmp fields and replace with:
+
+    annualSalary: Joi.number()
+        .min(0)
+        .allow(null, "")
+        .optional()
+        .messages({
+            "number.base": "Annual salary must be a number",
+            "number.min": "Annual salary cannot be negative",
+        }),
+
+    isPermanentEmp: Joi.boolean()
+        .optional()
+        .messages({
+            "boolean.base": "isPermanentEmp must be a boolean",
         }),
 
     panNumber: Joi.string()
@@ -652,6 +684,24 @@ export const updateEmployeeByAdminSchema = Joi.object({
         .valid('Single', 'Married', 'Divorced', 'Widowed')
         .messages({
             'any.only': 'Marital status must be Single, Married, Divorced, or Widowed'
+        }),
+
+    // In employeeValidation.js — updateEmployeeByAdminSchema
+    // Find the annualSalary and isPermanentEmp fields and replace with:
+
+    annualSalary: Joi.number()
+        .min(0)
+        .allow(null, "")
+        .optional()
+        .messages({
+            "number.base": "Annual salary must be a number",
+            "number.min": "Annual salary cannot be negative",
+        }),
+
+    isPermanentEmp: Joi.boolean()
+        .optional()
+        .messages({
+            "boolean.base": "isPermanentEmp must be a boolean",
         }),
 
     spouseName: Joi.string()

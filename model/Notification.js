@@ -96,7 +96,7 @@ const notificationSchema = new Schema({
     // RELATED ENTITY 
     relatedEntityType: {
         type: String,
-        enum: ['Employee', 'Document', 'Ticket', 'Asset', 'Leave', null],
+        enum: ['Employee', 'Document', 'Ticket', 'Asset', 'Leave', 'Permission', null],
         default: null
     },
     relatedEntityId: {

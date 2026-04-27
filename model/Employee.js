@@ -190,13 +190,13 @@ const employeeSchema = new Schema({
     },
 
     faceImage: {
-    type: String, // S3 URL
-  },
-  faceDescriptor: {
-    type: [Number], // 128-d array
-    default: [],
-  },
-  
+        type: String, // S3 URL
+    },
+    faceDescriptor: {
+        type: [Number], // 128-d array
+        default: [],
+    },
+
     gender: {
         type: String,
         enum: ['Male', 'Female', 'Other'],
@@ -360,6 +360,15 @@ const employeeSchema = new Schema({
         required: true
     },
 
+    isPermanentEmp: {
+        type: Boolean,
+        default: false
+    },
+    annualSalary: {
+        type: Number,
+        default: null
+    },
+
     profileImage: {
         type: String,
         default: null,
@@ -386,21 +395,21 @@ const employeeSchema = new Schema({
         type: Date,
         default: null,
     },
- 
+
     // Relieving letter (generated + sent by HR)
     relievingLetter: {
-        url:      { type: String, default: null },
+        url: { type: String, default: null },
         fileName: { type: String, default: null },
-        sentAt:   { type: Date,   default: null },
+        sentAt: { type: Date, default: null },
     },
- 
+
     // Experience certificate (generated + sent by HR)
     experienceCertificate: {
-        url:      { type: String, default: null },
+        url: { type: String, default: null },
         fileName: { type: String, default: null },
-        sentAt:   { type: Date,   default: null },
+        sentAt: { type: Date, default: null },
     },
-    
+
     profileImageKey: {
         type: String,
         default: null
