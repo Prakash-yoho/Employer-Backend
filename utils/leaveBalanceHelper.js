@@ -38,14 +38,27 @@ export const getCurrentQuarterStart = () => {
     return new Date(now.getFullYear(), quarterStartMonth, 1);
 };
 
-/**
- * Get the end of the current quarter
- */
 export const getCurrentQuarterEnd = () => {
     const now = new Date();
     const month = now.getMonth();
     const quarterEndMonth = Math.floor(month / 3) * 3 + 2;
     return new Date(now.getFullYear(), quarterEndMonth + 1, 0, 23, 59, 59, 999);
+};
+
+// ─── Salary cycle helpers (21st prev month → 20th current month) ─────────────
+// ─── Salary cycle helpers (HR-configured start day, default 21) ──────────────
+export const getCurrentSalaryCycleStart = (startDay = 21) => {
+    const now = new Date();
+    if (now.getDate() >= startDay) {
+        return new Date(now.getFullYear(), now.getMonth(), startDay, 0, 0, 0, 0);
+    }
+    return new Date(now.getFullYear(), now.getMonth() - 1, startDay, 0, 0, 0, 0);
+};
+
+export const getCurrentSalaryCycleEnd = (startDay = 21) => {
+    const start = getCurrentSalaryCycleStart(startDay);
+    // end = (startDay - 1) of the month after start
+    return new Date(start.getFullYear(), start.getMonth() + 1, startDay - 1, 23, 59, 59, 999);
 };
 
 /**
@@ -113,10 +126,9 @@ export const calculateLeaveBalance = async (
     const startOfYear = new Date(year, 0,  1,  0,  0,  0,   0);
     const endOfYear   = new Date(year, 11, 31, 23, 59, 59, 999);
 
-    const approvedLeaves = await Leave.find({
+const approvedLeaves = await Leave.find({
         employee:  employeeId,
         status:    'APPROVED',
-        startDate: { $gte: startOfYear, $lte: endOfYear }
     }).lean();
 
     // ── CL — current quarter only ─────────────────────────────────────────
@@ -136,29 +148,38 @@ export const calculateLeaveBalance = async (
     const clRemaining      = Math.max(0, parseFloat(clRemainingRaw.toFixed(2)));
 
     // Total CL used this entire year (all quarters)
-    const clUsedThisYear = approvedLeaves
-        .filter(l => l.leaveType === 'CASUAL')
+const clUsedThisYear = approvedLeaves
+        .filter(l => l.leaveType === 'CASUAL' &&
+            new Date(l.startDate) >= startOfYear &&
+            new Date(l.startDate) <= endOfYear)
         .reduce((sum, l) => sum + l.totalDays, 0);
-
     // ── LOP — full year ───────────────────────────────────────────────────
    // In calculateLeaveBalance — replace the LOP count section
 
 // LOP count — includes both explicit LOP leaves AND the LOP portion of split CL leaves
 const explicitLopDays = approvedLeaves
-    .filter(l => l.leaveType === 'LOP')
+    .filter(l => l.leaveType === 'LOP' &&
+        new Date(l.startDate) >= startOfYear &&
+        new Date(l.startDate) <= endOfYear)
     .reduce((sum, l) => sum + l.totalDays, 0);
 
 const splitLopDays = approvedLeaves
-    .filter(l => l.isSplit && l.lopDays > 0)
+    .filter(l => l.isSplit && l.lopDays > 0 &&
+        new Date(l.startDate) >= startOfYear &&
+        new Date(l.startDate) <= endOfYear)
     .reduce((sum, l) => sum + (l.lopDays || 0), 0);
 
 const lopDays = parseFloat((explicitLopDays + splitLopDays).toFixed(2));
 
     // ── Permanent-only leave types ────────────────────────────────────────
-    let slUsed = 0, maternityUsed = 0, paternityUsed = 0;
+let slUsed = 0, maternityUsed = 0, paternityUsed = 0;
     if (isPermanentEmp) {
         slUsed = approvedLeaves
-            .filter(l => l.leaveType === 'SICK')
+            .filter(l =>
+                l.leaveType === 'SICK' &&
+                new Date(l.startDate) >= startOfYear &&
+                new Date(l.startDate) <= endOfYear
+            )
             .reduce((sum, l) => sum + l.totalDays, 0);
 
         maternityUsed = approvedLeaves
@@ -169,7 +190,6 @@ const lopDays = parseFloat((explicitLopDays + splitLopDays).toFixed(2));
             .filter(l => l.leaveType === 'PATERNITY')
             .reduce((sum, l) => sum + l.totalDays, 0);
     }
-
     // ── Assemble balance object ───────────────────────────────────────────
     const balance = {
         casual: {
@@ -210,18 +230,20 @@ const lopDays = parseFloat((explicitLopDays + splitLopDays).toFixed(2));
             policyNote:     `${slDaysPerYear} days/year — HR may adjust at any time`
         };
 
-        balance.maternity = {
-            total:     maternityDays,
-            used:      parseFloat(maternityUsed.toFixed(2)),
-            remaining: Math.max(0, parseFloat((maternityDays - maternityUsed).toFixed(2))),
-            note:      'As per Maternity Benefit Act (26 weeks)'
+balance.maternity = {
+            total:          maternityDays,
+            used:           parseFloat(maternityUsed.toFixed(2)),
+            remaining:      Math.max(0, parseFloat((maternityDays - maternityUsed).toFixed(2))),
+            usedPercentage: maternityDays > 0 ? Math.min(100, Math.round((maternityUsed / maternityDays) * 100)) : 0,
+            note:           'As per Maternity Benefit Act (26 weeks)'
         };
 
         balance.paternity = {
-            total:     paternityDays,
-            used:      parseFloat(paternityUsed.toFixed(2)),
-            remaining: Math.max(0, parseFloat((paternityDays - paternityUsed).toFixed(2))),
-            note:      'As per local law'
+            total:          paternityDays,
+            used:           parseFloat(paternityUsed.toFixed(2)),
+            remaining:      Math.max(0, parseFloat((paternityDays - paternityUsed).toFixed(2))),
+            usedPercentage: paternityDays > 0 ? Math.min(100, Math.round((paternityUsed / paternityDays) * 100)) : 0,
+            note:           'As per local law'
         };
     }
 

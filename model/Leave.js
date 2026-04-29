@@ -53,8 +53,12 @@ const leaveSchema = new Schema({
             }
         ]
     },
-    totalDays: { type: Number, default: 1, min: 0.5, max: 90 },
-    // In leaveSchema — add these fields after totalDays
+totalDays: {
+    type: Number,
+    required: true,
+    min: 0.5,
+    max: 365
+},    
 
     clDays: {
         type: Number,

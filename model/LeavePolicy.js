@@ -6,6 +6,7 @@ const leavePolicySchema = new Schema({
         required: true,
         trim: true
     },
+    salaryCycle: { startDay: { type: Number, default: 21, min: 1, max: 28 } },
     // Who this policy applies to
     appliesTo: {
         type: String,

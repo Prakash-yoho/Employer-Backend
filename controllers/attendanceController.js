@@ -372,7 +372,7 @@ const calcDurationMinutes = (start, end) => {
   // handle overnight shift (optional safety)
   if (diffSeconds < 0) diffSeconds += 24 * 3600;
 
-  return Math.round(diffSeconds / 60);
+  return Math.floor(diffSeconds / 60);
 };
 
 // ─── GET /api/admin/attendance ────────────────────────────────────────────────

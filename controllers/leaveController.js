@@ -302,11 +302,105 @@ export const createLeaveRequest = async (req, res) => {
                 successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).`;
             }
 
+        } else if (validatedData.leaveType === 'PATERNITY') {
+            // ── Paternity: allow apply even over quota — HR gets alert ────────
+            const policy = await LeavePolicy.findOne({ isActive: true }).lean();
+            const maxPaternity = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
+
+            const yearStart = new Date(new Date().getFullYear(), 0, 1);
+            const usedPaternity = await Leave.aggregate([
+                {
+                    $match: {
+                        employee: user._id,
+                        leaveType: 'PATERNITY',
+                        status: { $in: ['APPROVED', 'PENDING'] },
+                        startDate: { $gte: yearStart }
+                    }
+                },
+                { $group: { _id: null, total: { $sum: '$totalDays' } } }
+            ]);
+            const usedDays = usedPaternity[0]?.total ?? 0;
+            const remainingPaternity = Math.max(0, maxPaternity - usedDays);
+            const paternityOverQuota = requestedDays > remainingPaternity;
+
+            finalLeaveType = 'PATERNITY';
+            clDays = 0;
+            lopDays = 0;
+
+            if (paternityOverQuota) {
+                successMessage = `Paternity leave submitted successfully.`;
+            }
+        } else if (validatedData.leaveType === 'MATERNITY') {
+            // ── Maternity: allow apply even over quota — HR gets alert ────────
+            const policy = await LeavePolicy.findOne({ isActive: true }).lean();
+            const maxMaternity = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
+
+            const yearStart = new Date(new Date().getFullYear(), 0, 1);
+            const usedMaternity = await Leave.aggregate([
+                {
+                    $match: {
+                        employee: user._id,
+                        leaveType: 'MATERNITY',
+                        status: { $in: ['APPROVED', 'PENDING'] },
+                        startDate: { $gte: yearStart }
+                    }
+                },
+                { $group: { _id: null, total: { $sum: '$totalDays' } } }
+            ]);
+            const usedDays = usedMaternity[0]?.total ?? 0;
+            const remainingMaternity = Math.max(0, maxMaternity - usedDays);
+            const maternityOverQuota = requestedDays > remainingMaternity;
+
+            finalLeaveType = 'MATERNITY';
+            clDays = 0;
+            lopDays = 0;
+
+            if (maternityOverQuota) {
+                successMessage = `Maternity leave submitted successfully.`;
+            }
+
+        } else if (validatedData.leaveType === 'SICK') {
+            // ── Sick Leave: block if quota exhausted, warn HR if over ─────────
+            const policy = await LeavePolicy.findOne({ isActive: true }).lean();
+            const maxSick = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
+
+            const yearStart = new Date(new Date().getFullYear(), 0, 1);
+            const usedSick = await Leave.aggregate([
+                {
+                    $match: {
+                        employee: user._id,
+                        leaveType: 'SICK',
+                        status: 'APPROVED',
+                        startDate: { $gte: yearStart }
+                    }
+                },
+                { $group: { _id: null, total: { $sum: '$totalDays' } } }
+            ]);
+            const usedDays = usedSick[0]?.total ?? 0;
+            const remainingSick = Math.max(0, maxSick - usedDays);
+if (remainingSick <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: `Your Sick Leave quota of ${maxSick} days is fully exhausted for this year. Please apply as Loss of Pay (LOP) instead.`
+        });
+    }
+
+    if (requestedDays > remainingSick) {
+        return res.status(400).json({
+            success: false,
+            message: `You only have ${remainingSick} Sick Leave day(s) remaining this year. Please apply for ${remainingSick} days or less.`
+        });
+    }
+
+    finalLeaveType = 'SICK';
+    clDays = 0;
+    lopDays = 0;
+
         } else {
-            // SL / Maternity / Paternity / explicit LOP — no splitting
+            // explicit LOP
             finalLeaveType = validatedData.leaveType;
             clDays = 0;
-            lopDays = finalLeaveType === 'LOP' ? requestedDays : 0;
+            lopDays = requestedDays;
         }
 
         // ── Create the single leave record ────────────────────────────────
@@ -339,6 +433,10 @@ export const createLeaveRequest = async (req, res) => {
             isActive: true
         });
 
+        // Build over-quota flag for maternity/paternity/sick
+        const isOverQuota = ['MATERNITY', 'PATERNITY', 'SICK'].includes(finalLeaveType) &&
+            successMessage.includes('HR will be alerted');
+
         for (const hrAdmin of hrAdmins) {
             if (hrAdmin.role === 'EMPLOYER_HR') {
                 sendMail({
@@ -349,10 +447,12 @@ export const createLeaveRequest = async (req, res) => {
             }
 
             await Notification.create({
-                title: 'New Leave Request',
+                title: isOverQuota ? '⚠ Leave Request — Quota Exceeded' : 'New Leave Request',
                 description: isSplit
                     ? `${employee.firstName} ${employee.lastName} applied leave: ${clDays}d CL + ${lopDays}d LOP`
-                    : `${employee.firstName} ${employee.lastName} has requested ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s)`,
+                    : isOverQuota
+                        ? `${employee.firstName} ${employee.lastName} applied ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s) — quota may be exceeded. Please review carefully.`
+                        : `${employee.firstName} ${employee.lastName} has requested ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s)`,
                 type: 'LEAVE_REQUEST',
                 recipientType: hrAdmin.role,
                 recipientId: hrAdmin._id,
@@ -362,18 +462,18 @@ export const createLeaveRequest = async (req, res) => {
                 relatedEntityType: 'Leave',
                 relatedEntityId: leaveRequest._id,
                 status: 'unread',
-                priority: 'medium',
+                priority: isOverQuota ? 'high' : 'medium',
                 metadata: {
                     requestId: leaveRequest.requestId,
                     leaveType: leaveRequest.leaveType,
                     employeeName: leaveRequest.employeeName,
                     isSplit,
                     clDays,
-                    lopDays
+                    lopDays,
+                    isOverQuota
                 }
             });
         }
-
         return res.status(201).json({
             success: true,
             message: successMessage,
@@ -937,12 +1037,19 @@ export const getLeaveStatistics = async (req, res) => {
             query.employee = user._id;
         }
 
-        const startOfYear = new Date(year, 0, 1);
-        const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999);
-        query.appliedAt = { $gte: startOfYear, $lte: endOfYear };
+        // Salary cycle: 21st of previous month → 20th of current month
+        // Salary cycle: HR-configured start day (default 21)
+        const cyclePolicy = await LeavePolicy.findOne({ isActive: true }).lean();
+        const cycleStartDay = cyclePolicy?.salaryCycle?.startDay ?? 21;
+        const now = new Date();
+        const cycleStartDate = now.getDate() >= cycleStartDay
+            ? new Date(now.getFullYear(), now.getMonth(), cycleStartDay, 0, 0, 0, 0)
+            : new Date(now.getFullYear(), now.getMonth() - 1, cycleStartDay, 0, 0, 0, 0);
+        const cycleEndDate = new Date(cycleStartDate.getFullYear(), cycleStartDate.getMonth() + 1, cycleStartDay - 1, 23, 59, 59, 999);
+        query.startDate = { $gte: cycleStartDate, $lte: cycleEndDate };
+
 
         const leaves = await Leave.find(query).lean();
-
         const stats = {
             total: leaves.length,
             pending: leaves.filter(l => l.status === 'PENDING').length,
@@ -1064,15 +1171,27 @@ export const createPermissionRequest = async (req, res) => {
         const monthStart = dayjs.utc(requestDate).startOf('month').toDate();
         const monthEnd = dayjs.utc(requestDate).endOf('month').toDate();
 
-        const existingThisMonth = await Permission.findOne({
+        // Check total approved/pending permission hours this month
+        const existingThisMonth = await Permission.find({
             employee: user._id,
             date: { $gte: monthStart, $lte: monthEnd },
             status: { $in: ['PENDING', 'APPROVED'] }
         });
-        if (existingThisMonth) {
+
+        const usedHours = existingThisMonth.reduce((sum, p) => sum + (p.durationHours || 0), 0);
+        const remainingHours = 2 - usedHours;
+
+        if (remainingHours <= 0) {
             return res.status(400).json({
                 success: false,
-                message: 'You already have a permission request for this month. Instead, you can apply for a half-day leave.'
+                message: `You have used your full 2-hour permission quota this month. Consider applying for a half-day leave instead.`
+            });
+        }
+
+        if (durationHours > remainingHours) {
+            return res.status(400).json({
+                success: false,
+                message: `You only have ${remainingHours * 60} minutes of permission remaining this month. Requested ${durationHours * 60} minutes exceeds your quota.`
             });
         }
 
@@ -1122,15 +1241,24 @@ export const createPermissionRequest = async (req, res) => {
             });
         }
 
+        const usedAfter = parseFloat((usedHours + durationHours).toFixed(2));
+        const remainingAfter = parseFloat((2 - usedAfter).toFixed(2));
+        const usedMins = Math.round(usedAfter * 60);
+        const remainMins = Math.round(remainingAfter * 60);
+
         return res.status(201).json({
             success: true,
-            message: 'Permission request submitted successfully',
+            message: remainingAfter > 0
+                ? `Permission submitted (${Math.round(durationHours * 60)}min). You have ${remainMins}min remaining this month.`
+                : `Permission submitted (${Math.round(durationHours * 60)}min). You have used your full 2-hour quota for this month.`,
             data: {
                 requestId: permission.requestId,
                 date: formatUTCDate(permission.date),
                 fromTime: permission.fromTime,
                 toTime: permission.toTime,
                 durationHours: permission.durationHours,
+                usedThisMonth: usedAfter,
+                remainingThisMonth: remainingAfter,
                 status: 'Pending',
                 reason: permission.reason
             }
