@@ -435,13 +435,11 @@ export const getAllEmployeesAttendance = async (req, res) => {
               { $ifNull: ["$clockIn", false] },
               {
                 $let: {
-                  vars: {
-                    parts: { $split: ["$clockIn", " "] },
-                  },
+                  vars: { parts: { $split: ["$clockIn", " "] } },
                   in: {
                     $let: {
                       vars: {
-                        period: { $arrayElemAt: ["$$parts", 1] },
+                        period: { $toUpper: { $arrayElemAt: ["$$parts", 1] } }, // ← $toUpper added
                         timeParts: { $split: [{ $arrayElemAt: ["$$parts", 0] }, ":"] },
                       },
                       in: {
@@ -452,34 +450,20 @@ export const getAllEmployeesAttendance = async (req, res) => {
                           },
                           in: {
                             $cond: [
-                              // Must be AM to possibly be on time
-                              { $eq: ["$$period", "AM"] },
+                              { $ne: ["$$period", "AM"] },
+                              "Late",
                               {
                                 $cond: [
-                                  // Before 9 AM → Present (very early)
-                                  { $lt: ["$$hour", 9] },
-                                  "Present",
                                   {
-                                    $cond: [
-                                      // Exactly 9 AM hour → check minutes
-                                      { $eq: ["$$hour", 9] },
-                                      {
-                                        $cond: [
-                                          // 9:00 - 9:35 → Present (within grace)
-                                          { $lte: ["$$minute", 35] },
-                                          "Present",
-                                          // 9:36+ AM → Late
-                                          "Late",
-                                        ],
-                                      },
-                                      // 10 AM, 11 AM → Late
-                                      "Late",
+                                    $lte: [
+                                      { $add: [{ $multiply: ["$$hour", 60] }, "$$minute"] },
+                                      575, // 9:35 → 9*60+35
                                     ],
                                   },
+                                  "Present",
+                                  "Late",
                                 ],
                               },
-                              // PM clock-in → always Late (office starts 9:30 AM)
-                              "Late",
                             ],
                           },
                         },
@@ -488,7 +472,6 @@ export const getAllEmployeesAttendance = async (req, res) => {
                   },
                 },
               },
-              // No clockIn → Absent
               "Absent",
             ],
           },

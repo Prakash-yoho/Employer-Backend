@@ -54,6 +54,26 @@ const leaveSchema = new Schema({
         ]
     },
     totalDays: { type: Number, default: 1, min: 0.5, max: 90 },
+    // In leaveSchema — add these fields after totalDays
+
+    clDays: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    lopDays: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    isSplit: {
+        type: Boolean,
+        default: false
+    },
+    splitNote: {
+        type: String,
+        default: null
+    },
     reason: { type: String, required: true, trim: true, minlength: 10, maxlength: 500 },
 
     // For LOP or maternity/paternity — HR-approved special leave
