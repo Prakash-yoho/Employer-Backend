@@ -87,9 +87,11 @@ totalDays: {
     status: {
         type: String,
         required: true,
-        enum: ['PENDING', 'APPROVED', 'REJECTED'],
+        enum: ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'],
         default: 'PENDING'
     },
+    cancelledAt: Date,
+cancelledByEmployee: { type: Boolean, default: false },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser', default: null },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser', default: null },
     approvedComments: { type: String, trim: true, maxlength: 500, default: null },

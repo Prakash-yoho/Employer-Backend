@@ -12,7 +12,8 @@ import {
     // getCLQuotaForCurrentQuarter,
     // getCurrentQuarterStart,
     // getCurrentQuarterEnd,
-    getCyclePeriodForDate
+    getCyclePeriodForDate,
+    getCycleQuarterForDate
 } from '../utils/leaveBalanceHelper.js';
 import {
     createLeaveValidation,
@@ -30,6 +31,9 @@ import {
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 dayjs.extend(utc);
+
+import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
+dayjs.extend(isSameOrBefore);
 
 // ─── Validation helper ────────────────────────────────────────────────────────
 
@@ -192,6 +196,8 @@ const formatLeaveResponse = (leave) => ({
 });
 
 
+
+
 /**
  * POST /api/leaves
  * Single leave request with correct CL + LOP day tracking
@@ -270,39 +276,142 @@ export const createLeaveRequest = async (req, res) => {
         let splitNote = null;
         let successMessage = 'Leave request submitted successfully';
 
+        // ════════════════════════════════════════════════════════════════
+        // CASUAL LEAVE — Cross-quarter aware CL calculation
+        // ════════════════════════════════════════════════════════════════
         if (validatedData.leaveType === 'CASUAL') {
-            const balance = await calculateLeaveBalance(user._id, isPermanent, endDateObj.getFullYear(), endDateObj);
-            const clRemaining = Math.max(0, parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2)));
-            if (clRemaining <= 0) {
-                finalLeaveType = 'LOP';
-                clDays = 0;
-                lopDays = requestedDays;
-                successMessage = `No CL quota remaining. ${requestedDays} day(s) applied as Loss of Pay (LOP).`;
 
-            } else if (clRemaining >= requestedDays) {
-                // ── All CL ────────────────────────────────────────────────
-                finalLeaveType = 'CASUAL';
-                clDays = requestedDays;
-                lopDays = 0;
+            // ── Fetch policy for startDay ─────────────────────────────────
+            const policy = await LeavePolicy.findOne({ isActive: true }).lean();
+            const startDay = policy?.salaryCycle?.startDay ?? 1;
+
+            // ── Step 1: Build a list of each day in the leave range ───────
+            // For half-day: only 1 day (0.5), treat as single day in startDate's quarter
+            if (validatedData.leaveDuration !== 'FULL_DAY') {
+                // ── Half day — single quarter, simple check ───────────────
+                const balance = await calculateLeaveBalance(
+                    user._id,
+                    isPermanent,
+                    startDateObj.getFullYear(),
+                    startDateObj  // ✅ use startDate
+                );
+
+
+                const clRemaining = Math.max(
+                    0,
+                    parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2))
+                );
+
+                if (clRemaining >= 0.5) {
+                    finalLeaveType = 'CASUAL';
+                    clDays = 0.5;
+                    lopDays = 0;
+                } else {
+                    finalLeaveType = 'LOP';
+                    clDays = 0;
+                    lopDays = 0.5;
+                    successMessage = 'No CL quota remaining. Half day applied as Loss of Pay (LOP).';
+                }
 
             } else {
-                // ── Partial split: some CL + rest LOP ────────────────────
-                // Use available CL quota, remainder becomes LOP
-                // For half-day: clRemaining >= 0.5 is already handled above (clRemaining >= requestedDays)
-                // So this branch only triggers for full-day multi-day leaves
-                clDays = parseFloat(clRemaining.toFixed(2));
+                // ── Full day leave — may span multiple quarters ───────────
+
+                // Step 2: Walk each day and group by quarter
+                const quarterGroups = {}; // key = "Q2-2026", value = { days, quarterNum, quarterYear, firstDate }
+
+                let current = dayjs.utc(startDateObj);
+                const end = dayjs.utc(endDateObj);
+
+while (current.isSameOrBefore(end, 'day')) {
+    const qInfo = getCycleQuarterForDate(current.toDate(), startDay);
+    const key = qInfo.quarterLabel;
+                    if (!quarterGroups[key]) {
+                        quarterGroups[key] = {
+                            days: 0,
+                            quarterNumber: qInfo.quarterNumber,
+                            quarterLabel: qInfo.quarterLabel,
+                            firstDate: current.toDate(), // first day of leave in this quarter
+                            quarterStart: qInfo.start,
+                            quarterEnd: qInfo.end
+                        };
+                    }
+                    quarterGroups[key].days++;
+                    current = current.add(1, 'day');
+                }
+
+                // Step 3: For each quarter group, check available CL
+                let totalCLGranted = 0;
+
+                for (const [key, group] of Object.entries(quarterGroups)) {
+                    // Get balance using the FIRST day of leave in this quarter
+                    // This correctly identifies the quarter and its full unlocked quota
+                    const balance = await calculateLeaveBalance(
+                        user._id,
+                        isPermanent,
+                        dayjs.utc(group.firstDate).year(),
+                        group.firstDate  // ✅ use first day of leave in this quarter
+                    );
+
+                    const today = dayjs.utc();
+                    const isCurrentQuarter =
+                        balance.currentQuarter.quarterNumber === group.quarterNumber &&
+                        balance.currentQuarter.quarterLabel === group.quarterLabel;
+
+                    let clAvailableInQuarter;
+
+                    if (isCurrentQuarter) {
+                        // Current quarter: use remaining (already accounts for used days)
+                        clAvailableInQuarter = Math.max(
+                            0,
+                            parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2))
+                        );
+                    } else {
+                        // Future quarter: full quota available (nothing used yet)
+                        // BUT we need to subtract any already-pending/approved leaves in that quarter
+                        clAvailableInQuarter = Math.max(
+                            0,
+                            parseFloat((balance.casual.quotaThisQuarter - balance.casual.usedThisQuarter).toFixed(2))
+                        );
+                    }
+
+                    // How many CL can we grant from this quarter?
+                    const clFromThisQuarter = Math.min(group.days, clAvailableInQuarter);
+                    totalCLGranted += clFromThisQuarter;
+
+                    console.log(`[CL Calc] ${key}: need=${group.days}, available=${clAvailableInQuarter}, granted=${clFromThisQuarter}`);
+                }
+
+                // Step 4: Determine final CL / LOP split
+                clDays = parseFloat(totalCLGranted.toFixed(2));
                 lopDays = parseFloat((requestedDays - clDays).toFixed(2));
 
-                // The leave type is stored as CASUAL since it started as a CL request
-                // but it has a LOP component — we mark it as split
-                finalLeaveType = 'CASUAL';
-                isSplit = true;
-                splitNote = `${clDays} day(s) Casual Leave + ${lopDays} day(s) Loss of Pay (insufficient CL quota)`;
-                successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).`;
+                if (clDays <= 0) {
+                    // All LOP
+                    finalLeaveType = 'LOP';
+                    clDays = 0;
+                    lopDays = requestedDays;
+                    successMessage = `No CL quota remaining. ${requestedDays} day(s) applied as Loss of Pay (LOP).`;
+
+                } else if (lopDays <= 0) {
+                    // All CL
+                    finalLeaveType = 'CASUAL';
+                    clDays = requestedDays;
+                    lopDays = 0;
+                    isSplit = false;
+
+                } else {
+                    // Mixed CL + LOP
+                    finalLeaveType = 'CASUAL';
+                    isSplit = true;
+                    splitNote = `${clDays} day(s) Casual Leave + ${lopDays} day(s) Loss of Pay (insufficient CL quota)`;
+                    successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).`;
+                }
             }
 
+            // ════════════════════════════════════════════════════════════════
+            // PATERNITY LEAVE
+            // ════════════════════════════════════════════════════════════════
         } else if (validatedData.leaveType === 'PATERNITY') {
-            // ── Paternity: allow apply even over quota — HR gets alert ────────
             const policy = await LeavePolicy.findOne({ isActive: true }).lean();
             const maxPaternity = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
 
@@ -329,8 +438,11 @@ export const createLeaveRequest = async (req, res) => {
             if (paternityOverQuota) {
                 successMessage = `Paternity leave submitted successfully.`;
             }
+
+            // ════════════════════════════════════════════════════════════════
+            // MATERNITY LEAVE
+            // ════════════════════════════════════════════════════════════════
         } else if (validatedData.leaveType === 'MATERNITY') {
-            // ── Maternity: allow apply even over quota — HR gets alert ────────
             const policy = await LeavePolicy.findOne({ isActive: true }).lean();
             const maxMaternity = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
 
@@ -358,8 +470,10 @@ export const createLeaveRequest = async (req, res) => {
                 successMessage = `Maternity leave submitted successfully.`;
             }
 
+            // ════════════════════════════════════════════════════════════════
+            // SICK LEAVE
+            // ════════════════════════════════════════════════════════════════
         } else if (validatedData.leaveType === 'SICK') {
-            // ── Sick Leave: block if quota exhausted, warn HR if over ─────────
             const policy = await LeavePolicy.findOne({ isActive: true }).lean();
             const maxSick = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
 
@@ -377,6 +491,7 @@ export const createLeaveRequest = async (req, res) => {
             ]);
             const usedDays = usedSick[0]?.total ?? 0;
             const remainingSick = Math.max(0, maxSick - usedDays);
+
             if (remainingSick <= 0) {
                 return res.status(400).json({
                     success: false,
@@ -395,14 +510,16 @@ export const createLeaveRequest = async (req, res) => {
             clDays = 0;
             lopDays = 0;
 
+            // ════════════════════════════════════════════════════════════════
+            // EXPLICIT LOP
+            // ════════════════════════════════════════════════════════════════
         } else {
-            // explicit LOP
             finalLeaveType = validatedData.leaveType;
             clDays = 0;
             lopDays = requestedDays;
         }
 
-        // ── Create the single leave record ────────────────────────────────
+        // ── Create the leave record ───────────────────────────────────────
         const requestId = await Leave.generateRequestId();
         const leaveRequest = new Leave({
             requestId,
@@ -432,7 +549,6 @@ export const createLeaveRequest = async (req, res) => {
             isActive: true
         });
 
-        // Build over-quota flag for maternity/paternity/sick
         const isOverQuota = ['MATERNITY', 'PATERNITY', 'SICK'].includes(finalLeaveType) &&
             successMessage.includes('HR will be alerted');
 
@@ -450,7 +566,7 @@ export const createLeaveRequest = async (req, res) => {
                 description: isSplit
                     ? `${employee.firstName} ${employee.lastName} applied leave: ${clDays}d CL + ${lopDays}d LOP`
                     : isOverQuota
-                        ? `${employee.firstName} ${employee.lastName} applied ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s) — quota may be exceeded. Please review carefully.`
+                        ? `${employee.firstName} ${employee.lastName} applied ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s) — quota may be exceeded.`
                         : `${employee.firstName} ${employee.lastName} has requested ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s)`,
                 type: 'LEAVE_REQUEST',
                 recipientType: hrAdmin.role,
@@ -473,6 +589,7 @@ export const createLeaveRequest = async (req, res) => {
                 }
             });
         }
+
         return res.status(201).json({
             success: true,
             message: successMessage,
@@ -483,13 +600,10 @@ export const createLeaveRequest = async (req, res) => {
                 startDate: formatUTCDate(leaveRequest.startDate),
                 endDate: formatUTCDate(leaveRequest.endDate),
                 totalDays: leaveRequest.totalDays,
-
-                // ── Split breakdown ────────────────────────────────────
                 clDays,
                 lopDays,
                 isSplit,
                 splitNote,
-
                 status: 'Pending',
                 appliedAt: leaveRequest.appliedAt,
                 reason: leaveRequest.reason,
@@ -725,26 +839,54 @@ export const cancelLeaveRequest = async (req, res) => {
         if (!leaveRequest) {
             return res.status(404).json({ success: false, message: 'Leave request not found' });
         }
+
+        // Only the owner can cancel
         if (leaveRequest.employee.toString() !== user._id.toString()) {
-            return res.status(403).json({ success: false, message: 'Not authorized to cancel this leave request' });
-        }
-        if (leaveRequest.status !== 'PENDING') {
-            return res.status(400).json({
+            return res.status(403).json({
                 success: false,
-                message: `Cannot cancel ${leaveRequest.status.toLowerCase()} leave request`
+                message: 'Not authorized to cancel this leave request'
             });
         }
 
-        await leaveRequest.deleteOne();
+        // Only PENDING or APPROVED can be cancelled
+        if (!['PENDING', 'APPROVED'].includes(leaveRequest.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot cancel a ${leaveRequest.status.toLowerCase()} leave request`
+            });
+        }
 
+        // Cannot cancel if leave has already started
+        const today = dayjs.utc().startOf('day');
+        const leaveStart = dayjs.utc(leaveRequest.startDate).startOf('day');
+
+        if (leaveStart.isSameOrBefore(today)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot cancel a leave that has already started or passed'
+            });
+        }
+
+        const wasApproved = leaveRequest.status === 'APPROVED';
+
+leaveRequest.status = 'CANCELLED';
+leaveRequest.cancelledAt = new Date();
+leaveRequest.cancelledByEmployee = true;
+await leaveRequest.save();
+
+
+        // Notify HR/Admin
         const hrAdmins = await EmployerUser.find({
             role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true
         });
+
         for (const hrAdmin of hrAdmins) {
             await Notification.create({
-                title: 'Leave Request Cancelled',
-                description: `${leaveRequest.employeeName} cancelled their ${formatLeaveType(leaveRequest.leaveType)} request (${leaveRequest.requestId})`,
+                title: wasApproved
+                    ? '⚠ Approved Leave Cancelled by Employee'
+                    : 'Leave Request Cancelled',
+                description: `${leaveRequest.employeeName} cancelled their ${formatLeaveType(leaveRequest.leaveType)} request (${leaveRequest.requestId})${wasApproved ? ' — this leave was already approved' : ''}`,
                 type: 'LEAVE_CANCELLED',
                 recipientType: hrAdmin.role,
                 recipientId: hrAdmin._id,
@@ -754,22 +896,28 @@ export const cancelLeaveRequest = async (req, res) => {
                 relatedEntityType: 'Leave',
                 relatedEntityId: leaveRequest._id,
                 status: 'unread',
-                priority: 'low',
+                priority: wasApproved ? 'high' : 'low',
                 metadata: {
                     requestId: leaveRequest.requestId,
-                    leaveType: leaveRequest.leaveType
+                    leaveType: leaveRequest.leaveType,
+                    wasApproved
                 }
             });
         }
 
-        return res.json({
-            success: true,
-            message: 'Leave request cancelled successfully',
-            data: {
-                requestId: leaveRequest.requestId,
-                cancelledAt: new Date()
-            }
-        });
+return res.json({
+    success: true,
+    message: wasApproved
+        ? 'Approved leave cancelled successfully. HR has been notified.'
+        : 'Leave request cancelled successfully',
+    data: {
+        requestId: leaveRequest.requestId,
+        cancelledAt: new Date(),
+        wasApproved
+    }
+});
+
+
     } catch (error) {
         console.error('cancelLeaveRequest error:', error);
         return res.status(500).json({
