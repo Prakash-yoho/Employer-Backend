@@ -206,17 +206,19 @@ export const calculateLeaveBalance = async (
     const monthIndexInQuarter = ((refCycleMonth - firstMonthOfQuarter) + 12) % 12;
     const clQuota             = parseFloat(((monthIndexInQuarter + 1) * daysPerMonth).toFixed(2));
     const fullQuarterQuota    = parseFloat(daysPerQuarter.toFixed(2));
-        
-    const clUsedThisQuarter = approvedLeaves
-        .filter(l => {
-            const s = dayjs.utc(l.startDate);
-            const lQuarter = getCycleQuarterForDate(s, startDay);
-            return (l.leaveType === 'CASUAL' || l.isSplit) &&
-                lQuarter.quarterNumber === currentQuarter.quarterNumber &&
-                lQuarter.start.isSameOrAfter(currentQuarter.start) &&
-                lQuarter.end.isSameOrBefore(currentQuarter.end);
-        })
-        .reduce((sum, l) => sum + (l.clDays > 0 ? l.clDays : l.totalDays), 0);
+
+const clUsedThisQuarter = approvedLeaves
+    .filter(l => {
+        const s = dayjs.utc(l.startDate);
+        const lQuarter = getCycleQuarterForDate(s, startDay);
+        return (l.leaveType === 'CASUAL' || l.isSplit) &&
+            lQuarter.quarterNumber === currentQuarter.quarterNumber &&
+            lQuarter.quarterLabel === currentQuarter.quarterLabel; // ← same Q AND same year
+    })
+    .reduce((sum, l) => sum + (l.clDays > 0 ? l.clDays : l.totalDays), 0);
+    
+    
+    
     const clRemainingRaw = clQuota - clUsedThisQuarter;
     const clRemaining = Math.max(0, parseFloat(clRemainingRaw.toFixed(2)));
 
