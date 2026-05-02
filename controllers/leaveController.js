@@ -9,9 +9,10 @@ import { sendMail } from '../utils/mailer.js';
 import { leaveEmailTemplate } from '../utils/emailTemplates.js';
 import {
     calculateLeaveBalance,
-    getCLQuotaForCurrentQuarter,
-    getCurrentQuarterStart,
-    getCurrentQuarterEnd
+    // getCLQuotaForCurrentQuarter,
+    // getCurrentQuarterStart,
+    // getCurrentQuarterEnd,
+    getCyclePeriodForDate
 } from '../utils/leaveBalanceHelper.js';
 import {
     createLeaveValidation,
@@ -620,23 +621,12 @@ export const getLeaveBalance = async (req, res) => {
 
         const balance = await calculateLeaveBalance(user._id, employee.isPermanentEmp, year);
 
-        const qStart = getCurrentQuarterStart();
-        const qEnd = getCurrentQuarterEnd();
-        const now = new Date();
-        const currentQuarter = Math.ceil((now.getMonth() + 1) / 3);
-
         return res.json({
             success: true,
             message: 'Leave balance fetched successfully',
             data: {
                 ...balance,
-                isPermanentEmployee: employee.isPermanentEmp,
-                currentQuarter: `Q${currentQuarter} ${year}`,
-                quarterPeriod: {
-                    start: qStart.toISOString().split('T')[0],
-                    end: qEnd.toISOString().split('T')[0]
-                },
-                year
+                isPermanentEmployee: employee.isPermanentEmp
             }
         });
     } catch (error) {
@@ -1160,41 +1150,54 @@ export const createPermissionRequest = async (req, res) => {
 
         const { date, fromTime, toTime, reason } = validation.data;
 
-        // Calculate duration
-        const [fH, fM] = fromTime.split(':').map(Number);
-        const [tH, tM] = toTime.split(':').map(Number);
+        // ── Calculate duration ────────────────────────────────────────────
+        const [fH, fM]     = fromTime.split(':').map(Number);
+        const [tH, tM]     = toTime.split(':').map(Number);
         const totalMinutes = (tH * 60 + tM) - (fH * 60 + fM);
         const durationHours = totalMinutes / 60;
+        const hours   = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        const durationText = [
+            hours   > 0 ? `${hours} hr`    : '',
+            minutes > 0 ? `${minutes} min` : ''
+        ].filter(Boolean).join(' ');
 
-        // 1 permission per month check
+        // ── Fetch policy for cycle startDay ───────────────────────────────
+        const policy   = await LeavePolicy.findOne({ isActive: true }).lean();
+        const startDay = policy?.salaryCycle?.startDay ?? 1;
+        const maxPermHours = policy?.permissionLeave?.hoursPerMonth ?? 2;
+
+        // ── Get cycle period for the requested date ───────────────────────
         const requestDate = parseUTCDate(date);
-        const monthStart = dayjs.utc(requestDate).startOf('month').toDate();
-        const monthEnd = dayjs.utc(requestDate).endOf('month').toDate();
+        const cyclePeriod = getCyclePeriodForDate(dayjs.utc(requestDate), startDay);
+        const cycleStart  = cyclePeriod.start.toDate();
+        const cycleEnd    = cyclePeriod.end.toDate();
 
-        // Check total approved/pending permission hours this month
-        const existingThisMonth = await Permission.find({
+        // ── Check how many hours used this cycle month ────────────────────
+        const existingThisCycle = await Permission.find({
             employee: user._id,
-            date: { $gte: monthStart, $lte: monthEnd },
-            status: { $in: ['PENDING', 'APPROVED'] }
-        });
+            date:     { $gte: cycleStart, $lte: cycleEnd },
+            status:   { $in: ['PENDING', 'APPROVED'] }
+        }).lean();
 
-        const usedHours = existingThisMonth.reduce((sum, p) => sum + (p.durationHours || 0), 0);
-        const remainingHours = 2 - usedHours;
+        const usedHours      = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
+        const remainingHours = maxPermHours - usedHours;
 
         if (remainingHours <= 0) {
             return res.status(400).json({
                 success: false,
-                message: `You have used your full 2-hour permission quota this month. Consider applying for a half-day leave instead.`
+                message: `You have used your full ${maxPermHours}-hour permission quota for the cycle period (${cyclePeriod.start.format('DD MMM')} – ${cyclePeriod.end.format('DD MMM YYYY')}). Consider applying for a half-day leave instead.`
             });
         }
 
         if (durationHours > remainingHours) {
             return res.status(400).json({
                 success: false,
-                message: `You only have ${remainingHours * 60} minutes of permission remaining this month. Requested ${durationHours * 60} minutes exceeds your quota.`
+                message: `You only have ${Math.round(remainingHours * 60)}min of permission remaining this cycle period. Requested ${Math.round(durationHours * 60)}min exceeds your quota.`
             });
         }
 
+        // ── Fetch employee ────────────────────────────────────────────────
         const employee = await Employee.findById(user._id)
             .select('employeeId firstName lastName department designation officialEmail')
             .lean();
@@ -1202,63 +1205,69 @@ export const createPermissionRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Employee not found' });
         }
 
-        const requestId = await Permission.generateRequestId();
+        const requestId  = await Permission.generateRequestId();
         const permission = new Permission({
             requestId,
-            employee: user._id,
-            employeeId: employee.employeeId,
+            employee:     user._id,
+            employeeId:   employee.employeeId,
             employeeName: `${employee.firstName} ${employee.lastName}`,
-            department: employee.department,
-            designation: employee.designation,
-            date: requestDate,
+            department:   employee.department,
+            designation:  employee.designation,
+            date:         requestDate,
             fromTime,
             toTime,
             durationHours,
+            durationText,
             reason
         });
 
         await permission.save();
 
+        // ── Notify HR/Admin ───────────────────────────────────────────────
         const hrAdmins = await EmployerUser.find({
-            role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
+            role:     { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true
         });
         for (const hr of hrAdmins) {
             await Notification.create({
-                title: 'New Permission Request',
+                title:       'New Permission Request',
                 description: `${employee.firstName} ${employee.lastName} requested permission on ${formatUTCDate(requestDate)} from ${fromTime} to ${toTime}`,
-                type: 'LEAVE_REQUEST',
-                recipientType: hr.role,
-                recipientId: hr._id,
-                recipientModel: 'EmployerUser',
-                senderId: user._id,
-                senderModel: 'Employee',
+                type:              'LEAVE_REQUEST',
+                recipientType:     hr.role,
+                recipientId:       hr._id,
+                recipientModel:    'EmployerUser',
+                senderId:          user._id,
+                senderModel:       'Employee',
                 relatedEntityType: 'Permission',
-                relatedEntityId: permission._id,
-                status: 'unread',
+                relatedEntityId:   permission._id,
+                status:   'unread',
                 priority: 'low',
                 metadata: { requestId: permission.requestId }
             });
         }
 
-        const usedAfter = parseFloat((usedHours + durationHours).toFixed(2));
-        const remainingAfter = parseFloat((2 - usedAfter).toFixed(2));
-        const usedMins = Math.round(usedAfter * 60);
-        const remainMins = Math.round(remainingAfter * 60);
+        const usedAfter      = parseFloat((usedHours + durationHours).toFixed(2));
+        const remainingAfter = parseFloat((maxPermHours - usedAfter).toFixed(2));
+        const remainMins     = Math.round(remainingAfter * 60);
 
         return res.status(201).json({
             success: true,
             message: remainingAfter > 0
-                ? `Permission submitted (${Math.round(durationHours * 60)}min). You have ${remainMins}min remaining this month.`
-                : `Permission submitted (${Math.round(durationHours * 60)}min). You have used your full 2-hour quota for this month.`,
+                ? `Permission submitted (${Math.round(durationHours * 60)}min). ${remainMins}min remaining this cycle period.`
+                : `Permission submitted. You have used your full ${maxPermHours}-hour quota for this cycle period.`,
             data: {
-                requestId: permission.requestId,
-                date: formatUTCDate(permission.date),
-                fromTime: permission.fromTime,
-                toTime: permission.toTime,
-                durationHours: permission.durationHours,
-                usedThisMonth: usedAfter,
+                requestId:          permission.requestId,
+                date:               formatUTCDate(permission.date),
+                fromTime:           permission.fromTime,
+                toTime:             permission.toTime,
+                duration:           durationText,
+                durationHours:      permission.durationHours,
+                usedThisMonth:      usedAfter,
                 remainingThisMonth: remainingAfter,
+                cyclePeriod: {
+                    start: cyclePeriod.start.format('DD MMM YYYY'),
+                    end:   cyclePeriod.end.format('DD MMM YYYY')
+                },
                 status: 'Pending',
                 reason: permission.reason
             }

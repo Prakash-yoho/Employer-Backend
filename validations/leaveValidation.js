@@ -280,6 +280,18 @@ export const createLeavePolicyValidation = Joi.object({
             'string.max': 'Policy name cannot exceed 100 characters'
         }),
 
+    salaryCycle: Joi.object({
+    startDay: Joi.number()
+        .integer()
+        .min(1)
+        .max(28)
+        .default(1)
+        .messages({
+            'number.min': 'Cycle start day must be at least 1',
+            'number.max': 'Cycle start day cannot exceed 28'
+        })
+}).optional(),
+
     appliesTo: Joi.string()
         .valid('ALL', 'PERMANENT')
         .default('ALL')
@@ -337,6 +349,8 @@ export const createLeavePolicyValidation = Joi.object({
     isActive: Joi.boolean().default(true)
 });
 
+// In leaveValidation.js — update updateLeavePolicyValidation
+
 export const updateLeavePolicyValidation = Joi.object({
     policyName: Joi.string()
         .trim()
@@ -347,9 +361,23 @@ export const updateLeavePolicyValidation = Joi.object({
         .valid('ALL', 'PERMANENT')
         .optional(),
 
+    // ── Add this ──────────────────────────────────────────────────────────
+    salaryCycle: Joi.object({
+        startDay: Joi.number()
+            .integer()
+            .min(1)
+            .max(28)
+            .optional()
+            .messages({
+                'number.min': 'Cycle start day must be at least 1',
+                'number.max': 'Cycle start day cannot exceed 28'
+            })
+    }).optional(),
+    // ─────────────────────────────────────────────────────────────────────
+
     leaveTypes: Joi.object({
         casual: Joi.object({
-            enabled:    Joi.boolean().optional(),
+            enabled:     Joi.boolean().optional(),
             daysPerYear: Joi.number().integer().min(1).max(30).optional()
                 .messages({
                     'number.min': 'Casual leave days must be at least 1',
@@ -358,7 +386,7 @@ export const updateLeavePolicyValidation = Joi.object({
         }).optional(),
 
         sick: Joi.object({
-            enabled:    Joi.boolean().optional(),
+            enabled:     Joi.boolean().optional(),
             daysPerYear: Joi.number().integer().min(1).max(30).optional()
                 .messages({
                     'number.min': 'Sick leave days must be at least 1',
@@ -367,7 +395,7 @@ export const updateLeavePolicyValidation = Joi.object({
         }).optional(),
 
         maternity: Joi.object({
-            enabled:    Joi.boolean().optional(),
+            enabled:     Joi.boolean().optional(),
             daysPerYear: Joi.number().integer().min(1).max(365).optional()
                 .messages({
                     'number.min': 'Maternity leave days must be at least 1',
@@ -376,7 +404,7 @@ export const updateLeavePolicyValidation = Joi.object({
         }).optional(),
 
         paternity: Joi.object({
-            enabled:    Joi.boolean().optional(),
+            enabled:     Joi.boolean().optional(),
             daysPerYear: Joi.number().integer().min(1).max(60).optional()
                 .messages({
                     'number.min': 'Paternity leave days must be at least 1',
