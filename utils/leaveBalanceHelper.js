@@ -26,23 +26,23 @@ import LeavePolicy from '../model/LeavePolicy.js';
  * @param {number}      startDay — 1–28, from policy
  */
 export const getCyclePeriodForDate = (date, startDay = 1) => {
-    const d   = dayjs.utc(date);
+    const d = dayjs.utc(date);
     const day = d.date();
 
     let cycleEndYear, cycleEndMonth;
 
     if (startDay === 1) {
         cycleEndMonth = d.month();   // 0-indexed
-        cycleEndYear  = d.year();
+        cycleEndYear = d.year();
     } else if (day >= startDay) {
         // In the second half of the cycle — cycle ends next month
-        const next    = d.add(1, 'month');
+        const next = d.add(1, 'month');
         cycleEndMonth = next.month();
-        cycleEndYear  = next.year();
+        cycleEndYear = next.year();
     } else {
         // In the first half — cycle ends this month
         cycleEndMonth = d.month();
-        cycleEndYear  = d.year();
+        cycleEndYear = d.year();
     }
 
     // Use string constructor — avoids dayjs object-literal bugs
@@ -61,10 +61,10 @@ export const getCyclePeriodForDate = (date, startDay = 1) => {
         .endOf('day');
 
     return {
-        start:      cycleStart,
-        end:        cycleEnd,
+        start: cycleStart,
+        end: cycleEnd,
         cycleMonth: cycleEndMonth,
-        cycleYear:  cycleEndYear
+        cycleYear: cycleEndYear
     };
 };
 
@@ -94,20 +94,23 @@ export const getCycleQuarterForDate = (date, startDay = 1) => {
     const quarterNumber = getCycleQuarterNumber(cycleMonth);
 
     const firstEndMonth = (quarterNumber - 1) * 3;   // 0, 3, 6, or 9
-    const lastEndMonth  = firstEndMonth + 2;           // 2, 5, 8, or 11
+    const lastEndMonth = firstEndMonth + 2;           // 2, 5, 8, or 11
 
     // String-based construction for safety
     const firstEndMonthStr = String(firstEndMonth + 1).padStart(2, '0');
-    const lastEndMonthStr  = String(lastEndMonth  + 1).padStart(2, '0');
-    const startDayStr      = String(startDay).padStart(2, '0');
+    const lastEndMonthStr = String(lastEndMonth + 1).padStart(2, '0');
+    const startDayStr = String(startDay).padStart(2, '0');
 
     // First cycle of quarter: starts at startDay of (firstEndMonth - 1)
-    const firstCycleStart = dayjs.utc(`${cycleYear}-${firstEndMonthStr}-01`)
+      const firstCycleStartYear = firstEndMonth === 0 && startDay > 1
+        ? cycleYear - 1
+        : cycleYear;
+
+    const firstCycleStart = dayjs.utc(`${firstCycleStartYear}-${firstEndMonthStr}-01`)
         .subtract(1, 'month')
         .date(startDay)
         .startOf('day');
 
-    // Last cycle of quarter: ends at (startDay - 1) of lastEndMonth
     const lastCycleEnd = dayjs.utc(`${cycleYear}-${lastEndMonthStr}-${startDayStr}`)
         .subtract(1, 'day')
         .endOf('day');
@@ -120,10 +123,10 @@ export const getCycleQuarterForDate = (date, startDay = 1) => {
     }
 
     return {
-        start:          firstCycleStart,
-        end:            lastCycleEnd,
+        start: firstCycleStart,
+        end: lastCycleEnd,
         quarterNumber,
-        quarterLabel:   `Q${quarterNumber} ${cycleYear}`,
+        quarterLabel: `Q${quarterNumber} ${cycleYear}`,
         firstEndMonth,
         lastEndMonth
     };
@@ -140,12 +143,12 @@ export const getCurrentCycleQuarter = (startDay = 1) => {
  * CL quota available up to and including the current cycle-month within the quarter.
  */
 export const getCLQuotaForCurrentCycleMonth = (clDaysPerYear = 12, startDay = 1) => {
-    const { cycleMonth }      = getCurrentCyclePeriod(startDay);
-    const quarterNumber       = getCycleQuarterNumber(cycleMonth);
+    const { cycleMonth } = getCurrentCyclePeriod(startDay);
+    const quarterNumber = getCycleQuarterNumber(cycleMonth);
     const firstMonthOfQuarter = (quarterNumber - 1) * 3;
     const monthIndexInQuarter = cycleMonth - firstMonthOfQuarter; // 0, 1, or 2
 
-    const daysPerQuarter    = clDaysPerYear / 4;
+    const daysPerQuarter = clDaysPerYear / 4;
     const daysPerCycleMonth = daysPerQuarter / 3;
 
     return parseFloat(((monthIndexInQuarter + 1) * daysPerCycleMonth).toFixed(2));
@@ -158,21 +161,24 @@ export const getCLQuotaForCurrentCycleMonth = (clDaysPerYear = 12, startDay = 1)
 export const calculateLeaveBalance = async (
     employeeId,
     isPermanentEmp = false,
-    year = dayjs.utc().year()
+    year = dayjs.utc().year(),
+    referenceDate = null
 ) => {
     // ── Fetch active policy ───────────────────────────────────────────────
-    const policy   = await LeavePolicy.findOne({ isActive: true }).lean();
+    const policy = await LeavePolicy.findOne({ isActive: true }).lean();
     const startDay = policy?.salaryCycle?.startDay ?? 1;
 
-    const clDaysPerYear = policy?.leaveTypes?.casual?.daysPerYear    ?? 12;
-    const slDaysPerYear = policy?.leaveTypes?.sick?.daysPerYear       ?? 10;
-    const maternityDays = policy?.leaveTypes?.maternity?.daysPerYear  ?? 182;
-    const paternityDays = policy?.leaveTypes?.paternity?.daysPerYear  ?? 15;
+    const clDaysPerYear = policy?.leaveTypes?.casual?.daysPerYear ?? 12;
+    const slDaysPerYear = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
+    const maternityDays = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
+    const paternityDays = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
 
     // ── Annual window — string-based, safe ───────────────────────────────
-    const startOfYear = dayjs.utc(`${year}-01-01`).startOf('day').toDate();
+  const startOfYear = dayjs.utc(`${year}-01-01`).startOf('day').toDate();
     const endOfYear   = dayjs.utc(`${year}-12-31`).endOf('day').toDate();
-
+    const endOfNextYear = dayjs.utc(`${year + 1}-12-31`).endOf('day').toDate();   
+    
+    
     if (isNaN(startOfYear.getTime()) || isNaN(endOfYear.getTime())) {
         throw new Error(`Invalid year provided: ${year}`);
     }
@@ -180,32 +186,39 @@ export const calculateLeaveBalance = async (
     // ── Fetch approved leaves for the year ───────────────────────────────
     const approvedLeaves = await Leave.find({
         employee:  employeeId,
-        status:    'APPROVED',
-        startDate: { $gte: startOfYear, $lte: endOfYear }
+        status:    { $in: ['APPROVED', 'PENDING'] },
+        startDate: { $gte: startOfYear, $lte: endOfNextYear }
     }).lean();
 
     // ── Current cycle and quarter ─────────────────────────────────────────
-    const currentCycle   = getCurrentCyclePeriod(startDay);
-    const currentQuarter = getCurrentCycleQuarter(startDay);
+    const ref = referenceDate ? dayjs.utc(referenceDate) : dayjs.utc();
+    const currentCycle = getCyclePeriodForDate(ref, startDay);
+    const currentQuarter = getCycleQuarterForDate(ref, startDay);
 
     if (!currentQuarter.start.isValid() || !currentQuarter.end.isValid()) {
         throw new Error('Invalid quarter date range. Check salaryCycle.startDay in policy.');
     }
 
-    const clQuota = getCLQuotaForCurrentCycleMonth(clDaysPerYear, startDay);
-
-    // ── CL used this quarter ──────────────────────────────────────────────
+ const daysPerQuarter      = clDaysPerYear / 4;
+    const daysPerMonth        = parseFloat((daysPerQuarter / 3).toFixed(2));
+    const firstMonthOfQuarter = (currentQuarter.quarterNumber - 1) * 3;
+    const refCycleMonth       = getCyclePeriodForDate(ref, startDay).cycleMonth;
+    const monthIndexInQuarter = ((refCycleMonth - firstMonthOfQuarter) + 12) % 12;
+    const clQuota             = parseFloat(((monthIndexInQuarter + 1) * daysPerMonth).toFixed(2));
+    const fullQuarterQuota    = parseFloat(daysPerQuarter.toFixed(2));
+        
     const clUsedThisQuarter = approvedLeaves
         .filter(l => {
             const s = dayjs.utc(l.startDate);
-            return l.leaveType === 'CASUAL' &&
-                s.isSameOrAfter(currentQuarter.start) &&
-                s.isSameOrBefore(currentQuarter.end);
+            const lQuarter = getCycleQuarterForDate(s, startDay);
+            return (l.leaveType === 'CASUAL' || l.isSplit) &&
+                lQuarter.quarterNumber === currentQuarter.quarterNumber &&
+                lQuarter.start.isSameOrAfter(currentQuarter.start) &&
+                lQuarter.end.isSameOrBefore(currentQuarter.end);
         })
-        .reduce((sum, l) => sum + l.totalDays, 0);
-
+        .reduce((sum, l) => sum + (l.clDays > 0 ? l.clDays : l.totalDays), 0);
     const clRemainingRaw = clQuota - clUsedThisQuarter;
-    const clRemaining    = Math.max(0, parseFloat(clRemainingRaw.toFixed(2)));
+    const clRemaining = Math.max(0, parseFloat(clRemainingRaw.toFixed(2)));
 
     // ── CL used this year ─────────────────────────────────────────────────
     const clUsedThisYear = approvedLeaves
@@ -226,35 +239,35 @@ export const calculateLeaveBalance = async (
     // ── Permanent leave types ─────────────────────────────────────────────
     let slUsed = 0, maternityUsed = 0, paternityUsed = 0;
     if (isPermanentEmp) {
-        slUsed        = approvedLeaves.filter(l => l.leaveType === 'SICK').reduce((sum, l) => sum + l.totalDays, 0);
+        slUsed = approvedLeaves.filter(l => l.leaveType === 'SICK').reduce((sum, l) => sum + l.totalDays, 0);
         maternityUsed = approvedLeaves.filter(l => l.leaveType === 'MATERNITY').reduce((sum, l) => sum + l.totalDays, 0);
         paternityUsed = approvedLeaves.filter(l => l.leaveType === 'PATERNITY').reduce((sum, l) => sum + l.totalDays, 0);
     }
 
     // ── Assemble balance object ───────────────────────────────────────────
     const balance = {
-        casual: {
-            quotaThisQuarter:     clQuota,
+ casual: {
+            quotaThisQuarter:     fullQuarterQuota,
             usedThisQuarter:      parseFloat(clUsedThisQuarter.toFixed(2)),
             remainingThisQuarter: clRemaining,
+            unlockedThisMonth:    clQuota,
             isLOP:                clRemainingRaw < 0,
             annualTotal:          clDaysPerYear,
             usedThisYear:         parseFloat(clUsedThisYear.toFixed(2)),
-            policyNote:           `${clDaysPerYear} days/year • ${clDaysPerYear / 4} days/quarter • resets each cycle-quarter`
-        },
+policyNote: `${clDaysPerYear} days/year • ${daysPerQuarter} days/quarter • unlocks ${daysPerMonth}/month`        },
         lop: {
             days: lopDays,
             note: 'Loss of Pay — leaves beyond available quota'
         },
         currentCycle: {
             start: currentCycle.start.format('YYYY-MM-DD'),
-            end:   currentCycle.end.format('YYYY-MM-DD'),
+            end: currentCycle.end.format('YYYY-MM-DD'),
             label: currentCycle.start.format('DD MMM') + ' – ' + currentCycle.end.format('DD MMM YYYY')
         },
         currentQuarter: {
-            start:         currentQuarter.start.format('YYYY-MM-DD'),
-            end:           currentQuarter.end.format('YYYY-MM-DD'),
-            quarterLabel:  currentQuarter.quarterLabel,
+            start: currentQuarter.start.format('YYYY-MM-DD'),
+            end: currentQuarter.end.format('YYYY-MM-DD'),
+            quarterLabel: currentQuarter.quarterLabel,
             quarterNumber: currentQuarter.quarterNumber
         },
         salaryCycleStartDay: startDay,
@@ -263,23 +276,23 @@ export const calculateLeaveBalance = async (
 
     if (isPermanentEmp) {
         balance.sick = {
-            total:          slDaysPerYear,
-            used:           parseFloat(slUsed.toFixed(2)),
-            remaining:      Math.max(0, parseFloat((slDaysPerYear - slUsed).toFixed(2))),
+            total: slDaysPerYear,
+            used: parseFloat(slUsed.toFixed(2)),
+            remaining: Math.max(0, parseFloat((slDaysPerYear - slUsed).toFixed(2))),
             usedPercentage: slDaysPerYear > 0 ? Math.min(100, Math.round((slUsed / slDaysPerYear) * 100)) : 0,
-            policyNote:     `${slDaysPerYear} days/year`
+            policyNote: `${slDaysPerYear} days/year`
         };
         balance.maternity = {
-            total:     maternityDays,
-            used:      parseFloat(maternityUsed.toFixed(2)),
+            total: maternityDays,
+            used: parseFloat(maternityUsed.toFixed(2)),
             remaining: Math.max(0, parseFloat((maternityDays - maternityUsed).toFixed(2))),
-            note:      'As per Maternity Benefit Act (26 weeks)'
+            note: 'As per Maternity Benefit Act (26 weeks)'
         };
         balance.paternity = {
-            total:     paternityDays,
-            used:      parseFloat(paternityUsed.toFixed(2)),
+            total: paternityDays,
+            used: parseFloat(paternityUsed.toFixed(2)),
             remaining: Math.max(0, parseFloat((paternityDays - paternityUsed).toFixed(2))),
-            note:      'As per local law'
+            note: 'As per local law'
         };
     }
 

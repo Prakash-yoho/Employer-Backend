@@ -271,11 +271,9 @@ export const createLeaveRequest = async (req, res) => {
         let successMessage = 'Leave request submitted successfully';
 
         if (validatedData.leaveType === 'CASUAL') {
-            const balance = await calculateLeaveBalance(user._id, isPermanent, new Date().getFullYear());
-            const clRemaining = balance.casual.remainingThisQuarter; // already Math.max(0, ...) in helper
-
-            if (clRemaining <= 0) {
-                // ── All LOP ───────────────────────────────────────────────
+const balance = await calculateLeaveBalance(user._id, isPermanent, endDateObj.getFullYear(), endDateObj);
+const clRemaining = Math.max(0, parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2)));
+if (clRemaining <= 0) {                
                 finalLeaveType = 'LOP';
                 clDays = 0;
                 lopDays = requestedDays;
@@ -379,23 +377,23 @@ export const createLeaveRequest = async (req, res) => {
             ]);
             const usedDays = usedSick[0]?.total ?? 0;
             const remainingSick = Math.max(0, maxSick - usedDays);
-if (remainingSick <= 0) {
-        return res.status(400).json({
-            success: false,
-            message: `Your Sick Leave quota of ${maxSick} days is fully exhausted for this year. Please apply as Loss of Pay (LOP) instead.`
-        });
-    }
+            if (remainingSick <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Your Sick Leave quota of ${maxSick} days is fully exhausted for this year. Please apply as Loss of Pay (LOP) instead.`
+                });
+            }
 
-    if (requestedDays > remainingSick) {
-        return res.status(400).json({
-            success: false,
-            message: `You only have ${remainingSick} Sick Leave day(s) remaining this year. Please apply for ${remainingSick} days or less.`
-        });
-    }
+            if (requestedDays > remainingSick) {
+                return res.status(400).json({
+                    success: false,
+                    message: `You only have ${remainingSick} Sick Leave day(s) remaining this year. Please apply for ${remainingSick} days or less.`
+                });
+            }
 
-    finalLeaveType = 'SICK';
-    clDays = 0;
-    lopDays = 0;
+            finalLeaveType = 'SICK';
+            clDays = 0;
+            lopDays = 0;
 
         } else {
             // explicit LOP
@@ -1151,36 +1149,36 @@ export const createPermissionRequest = async (req, res) => {
         const { date, fromTime, toTime, reason } = validation.data;
 
         // ── Calculate duration ────────────────────────────────────────────
-        const [fH, fM]     = fromTime.split(':').map(Number);
-        const [tH, tM]     = toTime.split(':').map(Number);
+        const [fH, fM] = fromTime.split(':').map(Number);
+        const [tH, tM] = toTime.split(':').map(Number);
         const totalMinutes = (tH * 60 + tM) - (fH * 60 + fM);
         const durationHours = totalMinutes / 60;
-        const hours   = Math.floor(totalMinutes / 60);
+        const hours = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
         const durationText = [
-            hours   > 0 ? `${hours} hr`    : '',
+            hours > 0 ? `${hours} hr` : '',
             minutes > 0 ? `${minutes} min` : ''
         ].filter(Boolean).join(' ');
 
         // ── Fetch policy for cycle startDay ───────────────────────────────
-        const policy   = await LeavePolicy.findOne({ isActive: true }).lean();
+        const policy = await LeavePolicy.findOne({ isActive: true }).lean();
         const startDay = policy?.salaryCycle?.startDay ?? 1;
         const maxPermHours = policy?.permissionLeave?.hoursPerMonth ?? 2;
 
         // ── Get cycle period for the requested date ───────────────────────
         const requestDate = parseUTCDate(date);
         const cyclePeriod = getCyclePeriodForDate(dayjs.utc(requestDate), startDay);
-        const cycleStart  = cyclePeriod.start.toDate();
-        const cycleEnd    = cyclePeriod.end.toDate();
+        const cycleStart = cyclePeriod.start.toDate();
+        const cycleEnd = cyclePeriod.end.toDate();
 
         // ── Check how many hours used this cycle month ────────────────────
         const existingThisCycle = await Permission.find({
             employee: user._id,
-            date:     { $gte: cycleStart, $lte: cycleEnd },
-            status:   { $in: ['PENDING', 'APPROVED'] }
+            date: { $gte: cycleStart, $lte: cycleEnd },
+            status: { $in: ['PENDING', 'APPROVED'] }
         }).lean();
 
-        const usedHours      = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
+        const usedHours = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
         const remainingHours = maxPermHours - usedHours;
 
         if (remainingHours <= 0) {
@@ -1205,15 +1203,15 @@ export const createPermissionRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Employee not found' });
         }
 
-        const requestId  = await Permission.generateRequestId();
+        const requestId = await Permission.generateRequestId();
         const permission = new Permission({
             requestId,
-            employee:     user._id,
-            employeeId:   employee.employeeId,
+            employee: user._id,
+            employeeId: employee.employeeId,
             employeeName: `${employee.firstName} ${employee.lastName}`,
-            department:   employee.department,
-            designation:  employee.designation,
-            date:         requestDate,
+            department: employee.department,
+            designation: employee.designation,
+            date: requestDate,
             fromTime,
             toTime,
             durationHours,
@@ -1225,30 +1223,30 @@ export const createPermissionRequest = async (req, res) => {
 
         // ── Notify HR/Admin ───────────────────────────────────────────────
         const hrAdmins = await EmployerUser.find({
-            role:     { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
+            role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true
         });
         for (const hr of hrAdmins) {
             await Notification.create({
-                title:       'New Permission Request',
+                title: 'New Permission Request',
                 description: `${employee.firstName} ${employee.lastName} requested permission on ${formatUTCDate(requestDate)} from ${fromTime} to ${toTime}`,
-                type:              'LEAVE_REQUEST',
-                recipientType:     hr.role,
-                recipientId:       hr._id,
-                recipientModel:    'EmployerUser',
-                senderId:          user._id,
-                senderModel:       'Employee',
+                type: 'LEAVE_REQUEST',
+                recipientType: hr.role,
+                recipientId: hr._id,
+                recipientModel: 'EmployerUser',
+                senderId: user._id,
+                senderModel: 'Employee',
                 relatedEntityType: 'Permission',
-                relatedEntityId:   permission._id,
-                status:   'unread',
+                relatedEntityId: permission._id,
+                status: 'unread',
                 priority: 'low',
                 metadata: { requestId: permission.requestId }
             });
         }
 
-        const usedAfter      = parseFloat((usedHours + durationHours).toFixed(2));
+        const usedAfter = parseFloat((usedHours + durationHours).toFixed(2));
         const remainingAfter = parseFloat((maxPermHours - usedAfter).toFixed(2));
-        const remainMins     = Math.round(remainingAfter * 60);
+        const remainMins = Math.round(remainingAfter * 60);
 
         return res.status(201).json({
             success: true,
@@ -1256,17 +1254,17 @@ export const createPermissionRequest = async (req, res) => {
                 ? `Permission submitted (${Math.round(durationHours * 60)}min). ${remainMins}min remaining this cycle period.`
                 : `Permission submitted. You have used your full ${maxPermHours}-hour quota for this cycle period.`,
             data: {
-                requestId:          permission.requestId,
-                date:               formatUTCDate(permission.date),
-                fromTime:           permission.fromTime,
-                toTime:             permission.toTime,
-                duration:           durationText,
-                durationHours:      permission.durationHours,
-                usedThisMonth:      usedAfter,
+                requestId: permission.requestId,
+                date: formatUTCDate(permission.date),
+                fromTime: permission.fromTime,
+                toTime: permission.toTime,
+                duration: durationText,
+                durationHours: permission.durationHours,
+                usedThisMonth: usedAfter,
                 remainingThisMonth: remainingAfter,
                 cyclePeriod: {
                     start: cyclePeriod.start.format('DD MMM YYYY'),
-                    end:   cyclePeriod.end.format('DD MMM YYYY')
+                    end: cyclePeriod.end.format('DD MMM YYYY')
                 },
                 status: 'Pending',
                 reason: permission.reason
