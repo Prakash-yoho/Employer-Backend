@@ -271,9 +271,9 @@ export const createLeaveRequest = async (req, res) => {
         let successMessage = 'Leave request submitted successfully';
 
         if (validatedData.leaveType === 'CASUAL') {
-const balance = await calculateLeaveBalance(user._id, isPermanent, endDateObj.getFullYear(), endDateObj);
-const clRemaining = Math.max(0, parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2)));
-if (clRemaining <= 0) {                
+            const balance = await calculateLeaveBalance(user._id, isPermanent, endDateObj.getFullYear(), endDateObj);
+            const clRemaining = Math.max(0, parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2)));
+            if (clRemaining <= 0) {
                 finalLeaveType = 'LOP';
                 clDays = 0;
                 lopDays = requestedDays;
