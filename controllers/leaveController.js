@@ -293,6 +293,7 @@ export const createLeaveRequest = async (req, res) => {
                     user._id,
                     isPermanent,
                     startDateObj.getFullYear(),
+                    
                     startDateObj  // ✅ use startDate
                 );
 
