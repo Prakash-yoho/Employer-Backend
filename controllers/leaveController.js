@@ -78,7 +78,8 @@ const formatDuration = (d) => ({
 const formatStatus = (s) => ({
     PENDING: 'Pending',
     APPROVED: 'Approved',
-    REJECTED: 'Rejected'
+    REJECTED: 'Rejected',
+    CANCELLED: 'Cancelled'
 }[s] || s);
 
 // ─── Date helper ──────────────────────────────────────────────────────────────
@@ -293,7 +294,7 @@ export const createLeaveRequest = async (req, res) => {
                     user._id,
                     isPermanent,
                     startDateObj.getFullYear(),
-                    
+
                     startDateObj  // ✅ use startDate
                 );
 
@@ -323,9 +324,9 @@ export const createLeaveRequest = async (req, res) => {
                 let current = dayjs.utc(startDateObj);
                 const end = dayjs.utc(endDateObj);
 
-while (current.isSameOrBefore(end, 'day')) {
-    const qInfo = getCycleQuarterForDate(current.toDate(), startDay);
-    const key = qInfo.quarterLabel;
+                while (current.isSameOrBefore(end, 'day')) {
+                    const qInfo = getCycleQuarterForDate(current.toDate(), startDay);
+                    const key = qInfo.quarterLabel;
                     if (!quarterGroups[key]) {
                         quarterGroups[key] = {
                             days: 0,
@@ -870,10 +871,10 @@ export const cancelLeaveRequest = async (req, res) => {
 
         const wasApproved = leaveRequest.status === 'APPROVED';
 
-leaveRequest.status = 'CANCELLED';
-leaveRequest.cancelledAt = new Date();
-leaveRequest.cancelledByEmployee = true;
-await leaveRequest.save();
+        leaveRequest.status = 'CANCELLED';
+        leaveRequest.cancelledAt = new Date();
+        leaveRequest.cancelledByEmployee = true;
+        await leaveRequest.save();
 
 
         // Notify HR/Admin
@@ -906,17 +907,17 @@ await leaveRequest.save();
             });
         }
 
-return res.json({
-    success: true,
-    message: wasApproved
-        ? 'Approved leave cancelled successfully. HR has been notified.'
-        : 'Leave request cancelled successfully',
-    data: {
-        requestId: leaveRequest.requestId,
-        cancelledAt: new Date(),
-        wasApproved
-    }
-});
+        return res.json({
+            success: true,
+            message: wasApproved
+                ? 'Approved leave cancelled successfully. HR has been notified.'
+                : 'Leave request cancelled successfully',
+            data: {
+                requestId: leaveRequest.requestId,
+                cancelledAt: new Date(),
+                wasApproved
+            }
+        });
 
 
     } catch (error) {

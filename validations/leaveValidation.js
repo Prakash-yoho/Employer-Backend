@@ -157,11 +157,11 @@ export const getLeavesQueryValidation = Joi.object({
             'number.min':  'Page must be at least 1'
         }),
 
-    limit: Joi.number()
-        .integer()
-        .min(1)
-        .max(100)
-        .default(10)
+   limit: Joi.number()
+    .integer()
+    .min(1)
+    .max(500)
+    .default(10)
         .messages({
             'number.base': 'Limit must be a number',
             'number.min':  'Limit must be at least 1',
@@ -274,7 +274,7 @@ export const updatePermissionStatusValidation = Joi.object({
 export const createLeavePolicyValidation = Joi.object({
     policyName: Joi.string()
         .trim()
-        .max(100)
+        .max(500)
         .default('Default Leave Policy')
         .messages({
             'string.max': 'Policy name cannot exceed 100 characters'

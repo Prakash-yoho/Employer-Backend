@@ -245,11 +245,16 @@ if (l.leaveType !== 'CASUAL') return false;
             }
 
             // For split leaves, use proportional clDays. For normal CL, each day = 1 CL day
-            if (l.isSplit && l.totalDays > 0) {
+       // For split leaves, use proportional clDays. For normal CL, each day = 1 CL day
+            if (l.isSplit && l.totalDays > 0 && (l.clDays ?? 0) > 0) {
                 const ratio = daysInThisQuarter / l.totalDays;
                 return sum + parseFloat((l.clDays * ratio).toFixed(2));
             }
-            return sum + daysInThisQuarter;
+            // For pure CASUAL (non-split), count each day as 1 CL day
+            if (l.leaveType === 'CASUAL' && !l.isSplit) {
+                return sum + daysInThisQuarter;
+            }
+            return sum;
         }, 0);
 
     const clRemainingRaw = fullQuarterQuota - clUsedThisQuarter;
