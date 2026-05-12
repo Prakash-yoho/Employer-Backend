@@ -1064,6 +1064,7 @@ export const previewDocument = async (req, res) => {
                 diplomaCertificate: 'diplomaCertificate',
                 consolidatedCertificate: 'consolidatedCertificate',
                 pgconsolidatedCertificate: 'pgconsolidatedCertificate',
+                diplomaconsolidatedCertificate: 'diplomaconsolidatedCertificate',
                 signedOfferLetter: 'signedOfferLetter',
                 bankPassbook: 'bankPassbook'
             };
@@ -1206,6 +1207,7 @@ export const downloadDocument = async (req, res) => {
                 diplomaCertificate: "diplomaCertificate",
                 consolidatedCertificate: "consolidatedCertificate",
                 pgconsolidatedCertificate: "pgconsolidatedCertificate",
+                diplomaconsolidatedCertificate:"diplomaconsolidatedCertificate",
                 signedOfferLetter: "signedOfferLetter",
                 bankPassbook: "bankPassbook",
             };
