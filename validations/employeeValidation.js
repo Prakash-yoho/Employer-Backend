@@ -34,11 +34,11 @@ export const createEmployeeSchema = Joi.object({
     // In createEmployeeSchema:
     annualSalary: Joi.number()
         .min(0)
-        .allow(null, "")
-        .optional()
+        .required()
         .messages({
             "number.base": "Annual salary must be a number",
             "number.min": "Annual salary cannot be negative",
+            "any.required": "Annual salary is required"
         }),
 
     isPermanentEmp: Joi.boolean()
@@ -66,6 +66,13 @@ export const createEmployeeSchema = Joi.object({
             'string.max': 'Password cannot exceed 128 characters',
             'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number and one special character',
             'any.required': 'Official password is required'
+        }),
+
+    doj: Joi.date()
+        .required()
+        .messages({
+            'date.base': 'DOJ must be a valid date',
+            'any.required': 'Date of joining is required'
         }),
 
     department: Joi.string()
@@ -210,17 +217,14 @@ export const updateEmployeeProfileSchema = Joi.object({
             'string.pattern.base': 'Invalid Aadhaar number'
         }),
 
-    // In employeeValidation.js — updateEmployeeByAdminSchema
-    // Find the annualSalary and isPermanentEmp fields and replace with:
-
-    annualSalary: Joi.number()
-        .min(0)
-        .allow(null, "")
-        .optional()
-        .messages({
-            "number.base": "Annual salary must be a number",
-            "number.min": "Annual salary cannot be negative",
-        }),
+    // annualSalary: Joi.number()
+    //     .min(0)
+    //     .required()
+    //     .messages({
+    //         "number.base": "Annual salary must be a number",
+    //         "number.min": "Annual salary cannot be negative",
+    //         "any.required": "Annual salary is required"
+    //     }),
 
     isPermanentEmp: Joi.boolean()
         .optional()
@@ -670,6 +674,11 @@ export const updateEmployeeByAdminSchema = Joi.object({
             'any.only': 'Gender must be Male, Female, or Other'
         }),
 
+    doj: Joi.date()
+        .messages({
+            'date.base': 'DOJ must be a valid date'
+        }),
+
     dateOfBirth: Joi.date()
         .max('now')
         .messages({
@@ -686,16 +695,14 @@ export const updateEmployeeByAdminSchema = Joi.object({
             'any.only': 'Marital status must be Single, Married, Divorced, or Widowed'
         }),
 
-    // In employeeValidation.js — updateEmployeeByAdminSchema
-    // Find the annualSalary and isPermanentEmp fields and replace with:
 
     annualSalary: Joi.number()
         .min(0)
-        .allow(null, "")
-        .optional()
+        .required()
         .messages({
             "number.base": "Annual salary must be a number",
             "number.min": "Annual salary cannot be negative",
+            "any.required": "Annual salary is required"
         }),
 
     isPermanentEmp: Joi.boolean()

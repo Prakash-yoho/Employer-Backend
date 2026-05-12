@@ -246,6 +246,10 @@ const employeeSchema = new Schema({
         required: true,
         match: [/^\S+@\S+\.\S+$/, "Invalid email format"]
     },
+    doj: {
+    type: Date,
+    required: true
+},
     officialPassword: {
         type: String,
         required: true
@@ -366,6 +370,7 @@ const employeeSchema = new Schema({
     },
     annualSalary: {
         type: Number,
+        required:true,
         default: null
     },
 

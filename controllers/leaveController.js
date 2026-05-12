@@ -9,11 +9,9 @@ import { sendMail } from '../utils/mailer.js';
 import { leaveEmailTemplate } from '../utils/emailTemplates.js';
 import {
     calculateLeaveBalance,
-    // getCLQuotaForCurrentQuarter,
-    // getCurrentQuarterStart,
-    // getCurrentQuarterEnd,
-    getCyclePeriodForDate,
-    getCycleQuarterForDate
+    getCycleForDate,
+    getAvailableCL,
+    allocateCLForLeave,
 } from '../utils/leaveBalanceHelper.js';
 import {
     createLeaveValidation,
@@ -58,31 +56,28 @@ const validateRequest = (schema, data) => {
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
 
-const formatLeaveType = (t) => {
-    const map = {
-        CASUAL: 'Casual Leave',
-        SICK: 'Sick Leave',
-        MATERNITY: 'Maternity Leave',
-        PATERNITY: 'Paternity Leave',
-        LOP: 'Loss of Pay'
-    };
-    return map[t] || t;
-};
+const formatLeaveType = (t) => ({
+    CASUAL:    'Casual Leave',
+    SICK:      'Sick Leave',
+    MATERNITY: 'Maternity Leave',
+    PATERNITY: 'Paternity Leave',
+    LOP:       'Loss of Pay'
+}[t] || t);
 
 const formatDuration = (d) => ({
-    FULL_DAY: 'Full Day',
-    FIRST_HALF: 'First Half',
+    FULL_DAY:    'Full Day',
+    FIRST_HALF:  'First Half',
     SECOND_HALF: 'Second Half'
 }[d] || d);
 
 const formatStatus = (s) => ({
-    PENDING: 'Pending',
-    APPROVED: 'Approved',
-    REJECTED: 'Rejected',
+    PENDING:   'Pending',
+    APPROVED:  'Approved',
+    REJECTED:  'Rejected',
     CANCELLED: 'Cancelled'
 }[s] || s);
 
-// ─── Date helper ──────────────────────────────────────────────────────────────
+// ─── Date helpers ─────────────────────────────────────────────────────────────
 
 const parseUTCDate = (input) => {
     if (!input) return null;
@@ -97,111 +92,14 @@ const formatUTCDate = (date) => {
 // ─── EMPLOYEE: Leave ──────────────────────────────────────────────────────────
 
 
-
-
-
-
-
-
-
-// ─── Internal helpers for leave creation ─────────────────────────────────────
-
-/**
- * Creates a single Leave document
- */
-const createSingleLeave = async ({
-    validatedData,
-    startDateObj,
-    endDateObj,
-    totalDays,
-    leaveType,
-    employee,
-    userId
-}) => {
-    const requestId = await Leave.generateRequestId();
-
-    const leaveRequest = new Leave({
-        requestId,
-        leaveType,
-        leaveDuration: validatedData.leaveDuration,
-        startDate: startDateObj,
-        endDate: endDateObj,
-        reason: validatedData.reason,
-        totalDays,
-        employee: userId,
-        employeeId: employee.employeeId,
-        employeeName: `${employee.firstName} ${employee.lastName}`,
-        department: employee.department,
-        designation: employee.designation,
-        employeeEmail: employee.officialEmail
-    });
-
-    await leaveRequest.save();
-    return leaveRequest;
-};
-
-/**
- * Notifies all active HR/Admin users about a new leave request
- */
-const notifyHRAdmins = async (leaveRequest, employee, totalDays, senderId) => {
-    const hrAdmins = await EmployerUser.find({
-        role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
-        isActive: true
-    });
-
-    for (const hrAdmin of hrAdmins) {
-        if (hrAdmin.role === 'EMPLOYER_HR') {
-            sendMail({
-                to: hrAdmin.email,
-                subject: `New Leave Request - ${employee.firstName} ${employee.lastName} (${leaveRequest.requestId})`,
-                html: leaveEmailTemplate('REQUEST_TO_HR', leaveRequest)
-            }).catch(err => console.error('Email error:', err));
-        }
-
-        await Notification.create({
-            title: 'New Leave Request',
-            description: `${employee.firstName} ${employee.lastName} has requested ${formatLeaveType(leaveRequest.leaveType)} for ${totalDays} day(s)`,
-            type: 'LEAVE_REQUEST',
-            recipientType: hrAdmin.role,
-            recipientId: hrAdmin._id,
-            recipientModel: 'EmployerUser',
-            senderId,
-            senderModel: 'Employee',
-            relatedEntityType: 'Leave',
-            relatedEntityId: leaveRequest._id,
-            status: 'unread',
-            priority: 'medium',
-            metadata: {
-                requestId: leaveRequest.requestId,
-                leaveType: leaveRequest.leaveType,
-                employeeName: leaveRequest.employeeName
-            }
-        });
-    }
-};
-
-/**
- * Formats a leave document for API response
- */
-const formatLeaveResponse = (leave) => ({
-    requestId: leave.requestId,
-    leaveType: formatLeaveType(leave.leaveType),
-    leaveDuration: formatDuration(leave.leaveDuration),
-    startDate: formatUTCDate(leave.startDate),
-    endDate: formatUTCDate(leave.endDate),
-    totalDays: leave.totalDays,
-    status: 'Pending',
-    appliedAt: leave.appliedAt,
-    reason: leave.reason,
-    isLOP: leave.leaveType === 'LOP'
-});
-
-
-
-
 /**
  * POST /api/leaves
- * Single leave request with correct CL + LOP day tracking
+ *
+ * Casual Leave Logic (Monthly Accrual + Carry-Forward):
+ * - Employee earns 1 CL per month starting from DOJ month
+ * - Unused CLs carry forward within calendar year
+ * - On Jan 1, reset to 0 then add January's 1 CL
+ * - Cross-month leaves split across respective cycle periods
  */
 export const createLeaveRequest = async (req, res) => {
     try {
@@ -219,7 +117,7 @@ export const createLeaveRequest = async (req, res) => {
         const validatedData = validation.data;
 
         const employee = await Employee.findById(user._id)
-            .select('employeeId firstName lastName department designation officialEmail isPermanentEmp')
+            .select('employeeId firstName lastName department designation officialEmail isPermanentEmp createdAt')
             .lean();
         if (!employee) {
             return res.status(404).json({ success: false, message: 'Employee not found' });
@@ -227,7 +125,7 @@ export const createLeaveRequest = async (req, res) => {
 
         const isPermanent = employee.isPermanentEmp || false;
 
-        // ── Eligibility check ─────────────────────────────────────────────
+        // ── Eligibility: permanent-only leave types ────────────────────────
         if (['SICK', 'MATERNITY', 'PATERNITY'].includes(validatedData.leaveType) && !isPermanent) {
             return res.status(403).json({
                 success: false,
@@ -235,7 +133,7 @@ export const createLeaveRequest = async (req, res) => {
             });
         }
 
-        // ── Overlap check ─────────────────────────────────────────────────
+        // ── Overlap check ──────────────────────────────────────────────────
         const overlappingLeave = await Leave.checkOverlap(
             user._id,
             validatedData.startDate,
@@ -244,24 +142,24 @@ export const createLeaveRequest = async (req, res) => {
         );
         if (overlappingLeave) {
             const durLabel =
-                overlappingLeave.leaveDuration === 'FULL_DAY' ? 'full day' :
-                    overlappingLeave.leaveDuration === 'FIRST_HALF' ? 'first half' : 'second half';
+                overlappingLeave.leaveDuration === 'FULL_DAY'    ? 'full day' :
+                overlappingLeave.leaveDuration === 'FIRST_HALF'  ? 'first half' : 'second half';
             return res.status(400).json({
                 success: false,
                 message: `You already have a ${durLabel} leave for these dates`,
                 conflictingLeave: {
-                    requestId: overlappingLeave.requestId,
+                    requestId:     overlappingLeave.requestId,
                     leaveDuration: formatDuration(overlappingLeave.leaveDuration),
-                    startDate: formatUTCDate(overlappingLeave.startDate),
-                    endDate: formatUTCDate(overlappingLeave.endDate),
-                    status: formatStatus(overlappingLeave.status)
+                    startDate:     formatUTCDate(overlappingLeave.startDate),
+                    endDate:       formatUTCDate(overlappingLeave.endDate),
+                    status:        formatStatus(overlappingLeave.status)
                 }
             });
         }
 
-        // ── Calculate dates and total days ────────────────────────────────
+        // ── Dates & requested days ─────────────────────────────────────────
         const startDateObj = parseUTCDate(validatedData.startDate);
-        const endDateObj = validatedData.leaveDuration !== 'FULL_DAY'
+        const endDateObj   = validatedData.leaveDuration !== 'FULL_DAY'
             ? parseUTCDate(validatedData.startDate)
             : parseUTCDate(validatedData.endDate);
 
@@ -269,152 +167,56 @@ export const createLeaveRequest = async (req, res) => {
             ? 0.5
             : Math.floor((endDateObj - startDateObj) / (1000 * 3600 * 24)) + 1;
 
-        // ── Determine leaveType, clDays, lopDays ──────────────────────────
-        let finalLeaveType = validatedData.leaveType;
-        let clDays = 0;
-        let lopDays = 0;
-        let isSplit = false;
-        let splitNote = null;
-        let successMessage = 'Leave request submitted successfully';
+        // ─────────────────────────────────────────────────────────────────────
+        // LEAVE TYPE LOGIC
+        // ─────────────────────────────────────────────────────────────────────
 
-        // ════════════════════════════════════════════════════════════════
-        // CASUAL LEAVE — Cross-quarter aware CL calculation
-        // ════════════════════════════════════════════════════════════════
+        let finalLeaveType  = validatedData.leaveType;
+        let clDays          = 0;
+        let lopDays         = 0;
+        let isSplit         = false;
+        let splitNote       = null;
+        let successMessage  = 'Leave request submitted successfully';
+
+        // ════════════════════════════════════════════════════════════════════
+        // CASUAL LEAVE — Monthly accrual + carry-forward with cycle periods
+        // ════════════════════════════════════════════════════════════════════
         if (validatedData.leaveType === 'CASUAL') {
-
-            // ── Fetch policy for startDay ─────────────────────────────────
-            const policy = await LeavePolicy.findOne({ isActive: true }).lean();
-            const startDay = policy?.salaryCycle?.startDay ?? 1;
-
-            // ── Step 1: Build a list of each day in the leave range ───────
-            // For half-day: only 1 day (0.5), treat as single day in startDate's quarter
-            if (validatedData.leaveDuration !== 'FULL_DAY') {
-                // ── Half day — single quarter, simple check ───────────────
-                const balance = await calculateLeaveBalance(
-                    user._id,
-                    isPermanent,
-                    startDateObj.getFullYear(),
-
-                    startDateObj  // ✅ use startDate
-                );
-
-
-                const clRemaining = Math.max(
-                    0,
-                    parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2))
-                );
-
-                if (clRemaining >= 0.5) {
-                    finalLeaveType = 'CASUAL';
-                    clDays = 0.5;
-                    lopDays = 0;
-                } else {
-                    finalLeaveType = 'LOP';
-                    clDays = 0;
-                    lopDays = 0.5;
-                    successMessage = 'No CL quota remaining. Half day applied as Loss of Pay (LOP).';
-                }
-
-            } else {
-                // ── Full day leave — may span multiple quarters ───────────
-
-                // Step 2: Walk each day and group by quarter
-                const quarterGroups = {}; // key = "Q2-2026", value = { days, quarterNum, quarterYear, firstDate }
-
-                let current = dayjs.utc(startDateObj);
-                const end = dayjs.utc(endDateObj);
-
-                while (current.isSameOrBefore(end, 'day')) {
-                    const qInfo = getCycleQuarterForDate(current.toDate(), startDay);
-                    const key = qInfo.quarterLabel;
-                    if (!quarterGroups[key]) {
-                        quarterGroups[key] = {
-                            days: 0,
-                            quarterNumber: qInfo.quarterNumber,
-                            quarterLabel: qInfo.quarterLabel,
-                            firstDate: current.toDate(), // first day of leave in this quarter
-                            quarterStart: qInfo.start,
-                            quarterEnd: qInfo.end
-                        };
-                    }
-                    quarterGroups[key].days++;
-                    current = current.add(1, 'day');
-                }
-
-                // Step 3: For each quarter group, check available CL
-                let totalCLGranted = 0;
-
-                for (const [key, group] of Object.entries(quarterGroups)) {
-                    // Get balance using the FIRST day of leave in this quarter
-                    // This correctly identifies the quarter and its full unlocked quota
-                    const balance = await calculateLeaveBalance(
-                        user._id,
-                        isPermanent,
-                        dayjs.utc(group.firstDate).year(),
-                        group.firstDate  // ✅ use first day of leave in this quarter
-                    );
-
-                    const today = dayjs.utc();
-                    const isCurrentQuarter =
-                        balance.currentQuarter.quarterNumber === group.quarterNumber &&
-                        balance.currentQuarter.quarterLabel === group.quarterLabel;
-
-                    let clAvailableInQuarter;
-
-                    if (isCurrentQuarter) {
-                        // Current quarter: use remaining (already accounts for used days)
-                        clAvailableInQuarter = Math.max(
-                            0,
-                            parseFloat((balance.casual.remainingThisQuarter ?? 0).toFixed(2))
-                        );
-                    } else {
-                        // Future quarter: full quota available (nothing used yet)
-                        // BUT we need to subtract any already-pending/approved leaves in that quarter
-                        clAvailableInQuarter = Math.max(
-                            0,
-                            parseFloat((balance.casual.quotaThisQuarter - balance.casual.usedThisQuarter).toFixed(2))
-                        );
-                    }
-
-                    // How many CL can we grant from this quarter?
-                    const clFromThisQuarter = Math.min(group.days, clAvailableInQuarter);
-                    totalCLGranted += clFromThisQuarter;
-
-                    console.log(`[CL Calc] ${key}: need=${group.days}, available=${clAvailableInQuarter}, granted=${clFromThisQuarter}`);
-                }
-
-                // Step 4: Determine final CL / LOP split
-                clDays = parseFloat(totalCLGranted.toFixed(2));
-                lopDays = parseFloat((requestedDays - clDays).toFixed(2));
-
-                if (clDays <= 0) {
-                    // All LOP
-                    finalLeaveType = 'LOP';
-                    clDays = 0;
-                    lopDays = requestedDays;
-                    successMessage = `No CL quota remaining. ${requestedDays} day(s) applied as Loss of Pay (LOP).`;
-
-                } else if (lopDays <= 0) {
-                    // All CL
-                    finalLeaveType = 'CASUAL';
-                    clDays = requestedDays;
-                    lopDays = 0;
-                    isSplit = false;
-
-                } else {
-                    // Mixed CL + LOP
-                    finalLeaveType = 'CASUAL';
-                    isSplit = true;
-                    splitNote = `${clDays} day(s) Casual Leave + ${lopDays} day(s) Loss of Pay (insufficient CL quota)`;
-                    successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).`;
-                }
-            }
-
-            // ════════════════════════════════════════════════════════════════
-            // PATERNITY LEAVE
-            // ════════════════════════════════════════════════════════════════
-        } else if (validatedData.leaveType === 'PATERNITY') {
-            const policy = await LeavePolicy.findOne({ isActive: true }).lean();
+    const policy = await LeavePolicy.findOne({ isActive: true }).lean();
+    const salaryCycleStartDay = policy?.salaryCycle?.startDay ?? 21;
+    const currentYear = dayjs.utc().year();
+    const dojDate = employee.doj || employee.createdAt;
+    
+    // Use allocateCLForLeave (not Optimized)
+    const allocation = await allocateCLForLeave(
+        user._id,
+        dojDate,
+        startDateObj,
+        endDateObj,
+        requestedDays,
+        salaryCycleStartDay,
+        currentYear
+    );
+    
+    clDays = allocation.clDays;
+    lopDays = allocation.lopDays;
+    isSplit = allocation.isSplit;
+    
+    if (lopDays > 0 && clDays === 0) {
+        finalLeaveType = 'LOP';
+        successMessage = `No CL quota remaining for this period. ${requestedDays} day(s) applied as Loss of Pay (LOP).`;
+        isSplit = false;
+        splitNote = null;
+    } else if (clDays > 0 && lopDays > 0) {
+        finalLeaveType = 'CASUAL';
+        splitNote = allocation.splitNote;
+        successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).`;
+    } else {
+        finalLeaveType = 'CASUAL';
+        successMessage = `Leave applied successfully as Casual Leave.`;
+    }
+} else if (validatedData.leaveType === 'PATERNITY') {
+            const policy       = await LeavePolicy.findOne({ isActive: true }).lean();
             const maxPaternity = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
 
             const yearStart = new Date(new Date().getFullYear(), 0, 1);
@@ -431,19 +233,23 @@ export const createLeaveRequest = async (req, res) => {
             ]);
             const usedDays = usedPaternity[0]?.total ?? 0;
             const remainingPaternity = Math.max(0, maxPaternity - usedDays);
-            const paternityOverQuota = requestedDays > remainingPaternity;
 
             finalLeaveType = 'PATERNITY';
             clDays = 0;
             lopDays = 0;
 
-            if (paternityOverQuota) {
-                successMessage = `Paternity leave submitted successfully.`;
+            if (remainingPaternity <= 0) {
+                successMessage = `Paternity leave quota exhausted. This will be reviewed by HR.`;
+            } else if (requestedDays > remainingPaternity) {
+                return res.status(400).json({
+                    success: false,
+                    message: `You only have ${remainingPaternity} Paternity leave day(s) remaining. Please apply for ${remainingPaternity} days or less.`
+                });
             }
 
-            // ════════════════════════════════════════════════════════════════
-            // MATERNITY LEAVE
-            // ════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════════
+        // MATERNITY LEAVE
+        // ════════════════════════════════════════════════════════════════════
         } else if (validatedData.leaveType === 'MATERNITY') {
             const policy = await LeavePolicy.findOne({ isActive: true }).lean();
             const maxMaternity = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
@@ -462,19 +268,23 @@ export const createLeaveRequest = async (req, res) => {
             ]);
             const usedDays = usedMaternity[0]?.total ?? 0;
             const remainingMaternity = Math.max(0, maxMaternity - usedDays);
-            const maternityOverQuota = requestedDays > remainingMaternity;
 
             finalLeaveType = 'MATERNITY';
             clDays = 0;
             lopDays = 0;
 
-            if (maternityOverQuota) {
-                successMessage = `Maternity leave submitted successfully.`;
+            if (remainingMaternity <= 0) {
+                successMessage = `Maternity leave quota exhausted. This will be reviewed by HR.`;
+            } else if (requestedDays > remainingMaternity) {
+                return res.status(400).json({
+                    success: false,
+                    message: `You only have ${remainingMaternity} Maternity leave day(s) remaining. Please apply for ${remainingMaternity} days or less.`
+                });
             }
 
-            // ════════════════════════════════════════════════════════════════
-            // SICK LEAVE
-            // ════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════════
+        // SICK LEAVE
+        // ════════════════════════════════════════════════════════════════════
         } else if (validatedData.leaveType === 'SICK') {
             const policy = await LeavePolicy.findOne({ isActive: true }).lean();
             const maxSick = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
@@ -512,16 +322,16 @@ export const createLeaveRequest = async (req, res) => {
             clDays = 0;
             lopDays = 0;
 
-            // ════════════════════════════════════════════════════════════════
-            // EXPLICIT LOP
-            // ════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════════
+        // EXPLICIT LOP
+        // ════════════════════════════════════════════════════════════════════
         } else {
-            finalLeaveType = validatedData.leaveType;
+            finalLeaveType = 'LOP';
             clDays = 0;
             lopDays = requestedDays;
         }
 
-        // ── Create the leave record ───────────────────────────────────────
+        // ── Create leave record ────────────────────────────────────────────
         const requestId = await Leave.generateRequestId();
         const leaveRequest = new Leave({
             requestId,
@@ -545,14 +355,11 @@ export const createLeaveRequest = async (req, res) => {
 
         await leaveRequest.save();
 
-        // ── Notify HR/Admin ───────────────────────────────────────────────
+        // ── Notify HR/Admin ────────────────────────────────────────────────
         const hrAdmins = await EmployerUser.find({
             role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true
         });
-
-        const isOverQuota = ['MATERNITY', 'PATERNITY', 'SICK'].includes(finalLeaveType) &&
-            successMessage.includes('HR will be alerted');
 
         for (const hrAdmin of hrAdmins) {
             if (hrAdmin.role === 'EMPLOYER_HR') {
@@ -564,12 +371,12 @@ export const createLeaveRequest = async (req, res) => {
             }
 
             await Notification.create({
-                title: isOverQuota ? '⚠ Leave Request — Quota Exceeded' : 'New Leave Request',
+                title: isSplit
+                    ? 'New Leave Request (CL + LOP Split)'
+                    : 'New Leave Request',
                 description: isSplit
-                    ? `${employee.firstName} ${employee.lastName} applied leave: ${clDays}d CL + ${lopDays}d LOP`
-                    : isOverQuota
-                        ? `${employee.firstName} ${employee.lastName} applied ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s) — quota may be exceeded.`
-                        : `${employee.firstName} ${employee.lastName} has requested ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s)`,
+                    ? `${employee.firstName} ${employee.lastName} applied leave: ${clDays}d CL + ${lopDays}d LOP (${splitNote})`
+                    : `${employee.firstName} ${employee.lastName} has requested ${formatLeaveType(finalLeaveType)} for ${requestedDays} day(s)`,
                 type: 'LEAVE_REQUEST',
                 recipientType: hrAdmin.role,
                 recipientId: hrAdmin._id,
@@ -579,7 +386,7 @@ export const createLeaveRequest = async (req, res) => {
                 relatedEntityType: 'Leave',
                 relatedEntityId: leaveRequest._id,
                 status: 'unread',
-                priority: isOverQuota ? 'high' : 'medium',
+                priority: 'medium',
                 metadata: {
                     requestId: leaveRequest.requestId,
                     leaveType: leaveRequest.leaveType,
@@ -587,7 +394,7 @@ export const createLeaveRequest = async (req, res) => {
                     isSplit,
                     clDays,
                     lopDays,
-                    isOverQuota
+                    splitNote
                 }
             });
         }
@@ -626,7 +433,6 @@ export const createLeaveRequest = async (req, res) => {
 
 /**
  * GET /api/leaves/me
- * Get my leave requests (employee)
  */
 export const getMyLeaveRequests = async (req, res) => {
     try {
@@ -637,15 +443,15 @@ export const getMyLeaveRequests = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
         const { status, leaveType, leaveDuration, page, limit, sortBy, sortOrder } = validation.data;
 
         const query = { employee: user._id };
-        if (status !== 'ALL') query.status = status;
-        if (leaveType !== 'ALL') query.leaveType = leaveType;
+        if (status        !== 'ALL') query.status        = status;
+        if (leaveType     !== 'ALL') query.leaveType     = leaveType;
         if (leaveDuration !== 'ALL') query.leaveDuration = leaveDuration;
 
         const skip = (page - 1) * limit;
@@ -657,30 +463,27 @@ export const getMyLeaveRequests = async (req, res) => {
         ]);
 
         const formattedLeaves = leaves.map(leave => ({
-            id: leave._id,
-            requestId: leave.requestId,
-            leaveType: formatLeaveType(leave.leaveType),
-            leaveTypeRaw: leave.leaveType,
+            id:            leave._id,
+            requestId:     leave.requestId,
+            leaveType:     formatLeaveType(leave.leaveType),
+            leaveTypeRaw:  leave.leaveType,
             leaveDuration: formatDuration(leave.leaveDuration),
-            startDate: formatUTCDate(leave.startDate),
-            endDate: formatUTCDate(leave.endDate),
-            totalDays: leave.totalDays,
-
-            // ── Split breakdown ────────────────────────────────────────────────
-            clDays: leave.clDays ?? 0,
-            lopDays: leave.lopDays ?? 0,
-            isSplit: leave.isSplit ?? false,
-            splitNote: leave.splitNote ?? null,
-
-            reason: leave.reason,
-            status: formatStatus(leave.status),
-            appliedAt: leave.appliedAt,
+            startDate:     formatUTCDate(leave.startDate),
+            endDate:       formatUTCDate(leave.endDate),
+            totalDays:     leave.totalDays,
+            clDays:        leave.clDays  ?? 0,
+            lopDays:       leave.lopDays ?? 0,
+            isSplit:       leave.isSplit ?? false,
+            splitNote:     leave.splitNote ?? null,
+            reason:        leave.reason,
+            status:        formatStatus(leave.status),
+            appliedAt:     leave.appliedAt,
             approvedComments: leave.approvedComments,
             rejectedComments: leave.rejectedComments,
-            approvedAt: leave.approvedAt,
-            rejectedAt: leave.rejectedAt,
-            isLOP: leave.leaveType === 'LOP',
-            isPartialLOP: leave.isSplit ?? false
+            approvedAt:    leave.approvedAt,
+            rejectedAt:    leave.rejectedAt,
+            isLOP:         leave.leaveType === 'LOP',
+            isPartialLOP:  leave.isSplit ?? false
         }));
 
         const totalPages = Math.ceil(total / limit);
@@ -704,14 +507,13 @@ export const getMyLeaveRequests = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching leave requests',
-            error: error.message
+            error:   error.message
         });
     }
 };
 
 /**
  * GET /api/leaves/me/balance
- * Get leave balance for logged-in employee
  */
 export const getLeaveBalance = async (req, res) => {
     try {
@@ -722,7 +524,7 @@ export const getLeaveBalance = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
@@ -748,19 +550,18 @@ export const getLeaveBalance = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching leave balance',
-            error: error.message
+            error:   error.message
         });
     }
 };
 
 /**
  * GET /api/leaves/me/:leaveRequestId
- * Get single leave by request ID
  */
 export const getLeaveRequestById = async (req, res) => {
     try {
         const { leaveRequestId } = req.params;
-        const user = req.user;
+        const user               = req.user;
 
         const leaveRequest = await Leave.findOne({ requestId: leaveRequestId })
             .populate('approvedBy', 'firstName lastName email role')
@@ -772,7 +573,7 @@ export const getLeaveRequestById = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Leave request not found' });
         }
 
-        const isOwner = leaveRequest.employee.toString() === user._id.toString();
+        const isOwner  = leaveRequest.employee.toString() === user._id.toString();
         const isHRAdmin = user.role && ['EMPLOYER_HR', 'EMPLOYER_ADMIN'].includes(user.role);
         if (!isOwner && !isHRAdmin) {
             return res.status(403).json({ success: false, message: 'Not authorized' });
@@ -781,41 +582,45 @@ export const getLeaveRequestById = async (req, res) => {
         return res.json({
             success: true,
             data: {
-                id: leaveRequest._id,
-                requestId: leaveRequest.requestId,
-                leaveType: formatLeaveType(leaveRequest.leaveType),
-                leaveTypeRaw: leaveRequest.leaveType,
+                id:            leaveRequest._id,
+                requestId:     leaveRequest.requestId,
+                leaveType:     formatLeaveType(leaveRequest.leaveType),
+                leaveTypeRaw:  leaveRequest.leaveType,
                 leaveDuration: formatDuration(leaveRequest.leaveDuration),
-                startDate: formatUTCDate(leaveRequest.startDate),
-                endDate: formatUTCDate(leaveRequest.endDate),
-                totalDays: leaveRequest.totalDays,
-                reason: leaveRequest.reason,
-                status: formatStatus(leaveRequest.status),
-                isLOP: leaveRequest.leaveType === 'LOP',
+                startDate:     formatUTCDate(leaveRequest.startDate),
+                endDate:       formatUTCDate(leaveRequest.endDate),
+                totalDays:     leaveRequest.totalDays,
+                clDays:        leaveRequest.clDays  ?? 0,
+                lopDays:       leaveRequest.lopDays ?? 0,
+                isSplit:       leaveRequest.isSplit ?? false,
+                splitNote:     leaveRequest.splitNote ?? null,
+                reason:        leaveRequest.reason,
+                status:        formatStatus(leaveRequest.status),
+                isLOP:         leaveRequest.leaveType === 'LOP',
                 employee: {
-                    id: leaveRequest.employee,
-                    employeeId: leaveRequest.employeeId,
-                    name: leaveRequest.employeeName,
-                    department: leaveRequest.department,
+                    id:          leaveRequest.employee,
+                    employeeId:  leaveRequest.employeeId,
+                    name:        leaveRequest.employeeName,
+                    department:  leaveRequest.department,
                     designation: leaveRequest.designation
                 },
-                appliedAt: leaveRequest.appliedAt,
+                appliedAt:       leaveRequest.appliedAt,
                 approvedBy: leaveRequest.approvedBy ? {
-                    id: leaveRequest.approvedBy._id,
-                    name: `${leaveRequest.approvedBy.firstName} ${leaveRequest.approvedBy.lastName}`,
+                    id:    leaveRequest.approvedBy._id,
+                    name:  `${leaveRequest.approvedBy.firstName} ${leaveRequest.approvedBy.lastName}`,
                     email: leaveRequest.approvedBy.email,
-                    role: leaveRequest.approvedBy.role
+                    role:  leaveRequest.approvedBy.role
                 } : null,
                 rejectedBy: leaveRequest.rejectedBy ? {
-                    id: leaveRequest.rejectedBy._id,
-                    name: `${leaveRequest.rejectedBy.firstName} ${leaveRequest.rejectedBy.lastName}`,
+                    id:    leaveRequest.rejectedBy._id,
+                    name:  `${leaveRequest.rejectedBy.firstName} ${leaveRequest.rejectedBy.lastName}`,
                     email: leaveRequest.rejectedBy.email,
-                    role: leaveRequest.rejectedBy.role
+                    role:  leaveRequest.rejectedBy.role
                 } : null,
                 approvedComments: leaveRequest.approvedComments,
                 rejectedComments: leaveRequest.rejectedComments,
-                approvedAt: leaveRequest.approvedAt,
-                rejectedAt: leaveRequest.rejectedAt
+                approvedAt:       leaveRequest.approvedAt,
+                rejectedAt:       leaveRequest.rejectedAt
             }
         });
     } catch (error) {
@@ -823,18 +628,17 @@ export const getLeaveRequestById = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching leave request',
-            error: error.message
+            error:   error.message
         });
     }
 };
 
 /**
  * DELETE /api/leaves/me/:leaveRequestId/cancel
- * Cancel a pending leave
  */
 export const cancelLeaveRequest = async (req, res) => {
     try {
-        const user = req.user;
+        const user             = req.user;
         const { leaveRequestId } = req.params;
 
         const leaveRequest = await Leave.findOne({ requestId: leaveRequestId });
@@ -842,7 +646,6 @@ export const cancelLeaveRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Leave request not found' });
         }
 
-        // Only the owner can cancel
         if (leaveRequest.employee.toString() !== user._id.toString()) {
             return res.status(403).json({
                 success: false,
@@ -850,7 +653,6 @@ export const cancelLeaveRequest = async (req, res) => {
             });
         }
 
-        // Only PENDING or APPROVED can be cancelled
         if (!['PENDING', 'APPROVED'].includes(leaveRequest.status)) {
             return res.status(400).json({
                 success: false,
@@ -858,8 +660,7 @@ export const cancelLeaveRequest = async (req, res) => {
             });
         }
 
-        // Cannot cancel if leave has already started
-        const today = dayjs.utc().startOf('day');
+        const today      = dayjs.utc().startOf('day');
         const leaveStart = dayjs.utc(leaveRequest.startDate).startOf('day');
 
         if (leaveStart.isSameOrBefore(today)) {
@@ -871,15 +672,13 @@ export const cancelLeaveRequest = async (req, res) => {
 
         const wasApproved = leaveRequest.status === 'APPROVED';
 
-        leaveRequest.status = 'CANCELLED';
-        leaveRequest.cancelledAt = new Date();
+        leaveRequest.status             = 'CANCELLED';
+        leaveRequest.cancelledAt        = new Date();
         leaveRequest.cancelledByEmployee = true;
         await leaveRequest.save();
 
-
-        // Notify HR/Admin
         const hrAdmins = await EmployerUser.find({
-            role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
+            role:     { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true
         });
 
@@ -889,19 +688,19 @@ export const cancelLeaveRequest = async (req, res) => {
                     ? '⚠ Approved Leave Cancelled by Employee'
                     : 'Leave Request Cancelled',
                 description: `${leaveRequest.employeeName} cancelled their ${formatLeaveType(leaveRequest.leaveType)} request (${leaveRequest.requestId})${wasApproved ? ' — this leave was already approved' : ''}`,
-                type: 'LEAVE_CANCELLED',
-                recipientType: hrAdmin.role,
-                recipientId: hrAdmin._id,
-                recipientModel: 'EmployerUser',
-                senderId: user._id,
-                senderModel: 'Employee',
+                type:              'LEAVE_CANCELLED',
+                recipientType:     hrAdmin.role,
+                recipientId:       hrAdmin._id,
+                recipientModel:    'EmployerUser',
+                senderId:          user._id,
+                senderModel:       'Employee',
                 relatedEntityType: 'Leave',
-                relatedEntityId: leaveRequest._id,
-                status: 'unread',
-                priority: wasApproved ? 'high' : 'low',
+                relatedEntityId:   leaveRequest._id,
+                status:            'unread',
+                priority:          wasApproved ? 'high' : 'low',
                 metadata: {
-                    requestId: leaveRequest.requestId,
-                    leaveType: leaveRequest.leaveType,
+                    requestId:  leaveRequest.requestId,
+                    leaveType:  leaveRequest.leaveType,
                     wasApproved
                 }
             });
@@ -913,19 +712,18 @@ export const cancelLeaveRequest = async (req, res) => {
                 ? 'Approved leave cancelled successfully. HR has been notified.'
                 : 'Leave request cancelled successfully',
             data: {
-                requestId: leaveRequest.requestId,
+                requestId:   leaveRequest.requestId,
                 cancelledAt: new Date(),
                 wasApproved
             }
         });
-
 
     } catch (error) {
         console.error('cancelLeaveRequest error:', error);
         return res.status(500).json({
             success: false,
             message: 'Error cancelling leave request',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -934,7 +732,6 @@ export const cancelLeaveRequest = async (req, res) => {
 
 /**
  * GET /api/leaves
- * Get all leave requests (HR/Admin)
  */
 export const getAllLeaveRequests = async (req, res) => {
     try {
@@ -943,7 +740,7 @@ export const getAllLeaveRequests = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
@@ -953,15 +750,15 @@ export const getAllLeaveRequests = async (req, res) => {
         } = validation.data;
 
         const query = {};
-        if (status !== 'ALL') query.status = status;
-        if (leaveType !== 'ALL') query.leaveType = leaveType;
+        if (status        !== 'ALL') query.status        = status;
+        if (leaveType     !== 'ALL') query.leaveType     = leaveType;
         if (leaveDuration !== 'ALL') query.leaveDuration = leaveDuration;
         if (department) query.department = new RegExp(department, 'i');
 
         if (startDate && endDate) {
             const start = parseUTCDate(startDate);
-            const end = dayjs.utc(endDate).endOf('day').toDate();
-            query.$or = [{ startDate: { $lte: end }, endDate: { $gte: start } }];
+            const end   = dayjs.utc(endDate).endOf('day').toDate();
+            query.$or   = [{ startDate: { $lte: end }, endDate: { $gte: start } }];
         } else if (startDate) {
             query.startDate = { $gte: parseUTCDate(startDate) };
         } else if (endDate) {
@@ -983,50 +780,49 @@ export const getAllLeaveRequests = async (req, res) => {
         ]);
 
         const formattedLeaves = leaves.map(leave => ({
-            id: leave._id,
-            requestId: leave.requestId,
-            leaveType: formatLeaveType(leave.leaveType),
-            leaveTypeRaw: leave.leaveType,
+            id:            leave._id,
+            requestId:     leave.requestId,
+            leaveType:     formatLeaveType(leave.leaveType),
+            leaveTypeRaw:  leave.leaveType,
             leaveDuration: formatDuration(leave.leaveDuration),
-            startDate: formatUTCDate(leave.startDate),
-            endDate: formatUTCDate(leave.endDate),
-            totalDays: leave.totalDays,
-            // ── Split breakdown ────────────────────────────────────────────────
-            clDays: leave.clDays ?? 0,
-            lopDays: leave.lopDays ?? 0,
-            isSplit: leave.isSplit ?? false,
-            splitNote: leave.splitNote ?? null,
-            reason: leave.reason,
-            status: formatStatus(leave.status),
-            isLOP: leave.leaveType === 'LOP',
-            employee: leave.employee ? {
-                id: leave.employee._id,
-                name: `${leave.employee.firstName} ${leave.employee.lastName}`,
-                email: leave.employee.officialEmail,
+            startDate:     formatUTCDate(leave.startDate),
+            endDate:       formatUTCDate(leave.endDate),
+            totalDays:     leave.totalDays,
+            clDays:        leave.clDays  ?? 0,
+            lopDays:       leave.lopDays ?? 0,
+            isSplit:       leave.isSplit ?? false,
+            splitNote:     leave.splitNote ?? null,
+            reason:        leave.reason,
+            status:        formatStatus(leave.status),
+            isLOP:         leave.leaveType === 'LOP',
+            employee:      leave.employee ? {
+                id:            leave.employee._id,
+                name:          `${leave.employee.firstName} ${leave.employee.lastName}`,
+                email:         leave.employee.officialEmail,
                 isPermanentEmp: leave.employee.isPermanentEmp
             } : null,
-            employeeName: leave.employeeName,
-            department: leave.department,
-            appliedAt: leave.appliedAt,
+            employeeName:  leave.employeeName,
+            department:    leave.department,
+            appliedAt:     leave.appliedAt,
             actionBy:
                 leave.status === 'APPROVED' && leave.approvedBy ? {
-                    id: leave.approvedBy._id,
-                    name: `${leave.approvedBy.firstName} ${leave.approvedBy.lastName}`,
+                    id:    leave.approvedBy._id,
+                    name:  `${leave.approvedBy.firstName} ${leave.approvedBy.lastName}`,
                     email: leave.approvedBy.email,
-                    role: leave.approvedBy.role
+                    role:  leave.approvedBy.role
                 } :
-                    leave.status === 'REJECTED' && leave.rejectedBy ? {
-                        id: leave.rejectedBy._id,
-                        name: `${leave.rejectedBy.firstName} ${leave.rejectedBy.lastName}`,
-                        email: leave.rejectedBy.email,
-                        role: leave.rejectedBy.role
-                    } : null,
+                leave.status === 'REJECTED' && leave.rejectedBy ? {
+                    id:    leave.rejectedBy._id,
+                    name:  `${leave.rejectedBy.firstName} ${leave.rejectedBy.lastName}`,
+                    email: leave.rejectedBy.email,
+                    role:  leave.rejectedBy.role
+                } : null,
             actionAt:
                 leave.status === 'APPROVED' ? leave.approvedAt :
-                    leave.status === 'REJECTED' ? leave.rejectedAt : null,
+                leave.status === 'REJECTED' ? leave.rejectedAt : null,
             comments:
                 leave.status === 'APPROVED' ? leave.approvedComments :
-                    leave.status === 'REJECTED' ? leave.rejectedComments : null
+                leave.status === 'REJECTED' ? leave.rejectedComments : null
         }));
 
         const totalPages = Math.ceil(total / limit);
@@ -1050,18 +846,17 @@ export const getAllLeaveRequests = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching leave requests',
-            error: error.message
+            error:   error.message
         });
     }
 };
 
 /**
  * PATCH /api/leaves/:leaveRequestId/status
- * Approve or reject a leave (HR/Admin)
  */
 export const updateLeaveStatus = async (req, res) => {
     try {
-        const user = req.user;
+        const user             = req.user;
         const { leaveRequestId } = req.params;
 
         const validation = validateRequest(updateLeaveStatusValidation, req.body);
@@ -1069,7 +864,7 @@ export const updateLeaveStatus = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
@@ -1096,18 +891,18 @@ export const updateLeaveStatus = async (req, res) => {
 
         if (employee) {
             await Notification.create({
-                title: status === 'APPROVED' ? 'Leave Request Approved' : 'Leave Request Rejected',
+                title:       status === 'APPROVED' ? 'Leave Request Approved' : 'Leave Request Rejected',
                 description: `Your ${formatLeaveType(leaveRequest.leaveType)} request (${leaveRequest.requestId}) has been ${status.toLowerCase()}.${comments ? ` Comments: ${comments}` : ''}`,
-                type: status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
-                recipientType: 'EMPLOYEE',
-                recipientId: leaveRequest.employee,
-                recipientModel: 'Employee',
-                senderId: user._id,
-                senderModel: 'EmployerUser',
+                type:              status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
+                recipientType:     'EMPLOYEE',
+                recipientId:       leaveRequest.employee,
+                recipientModel:    'Employee',
+                senderId:          user._id,
+                senderModel:       'EmployerUser',
                 relatedEntityType: 'Leave',
-                relatedEntityId: leaveRequest._id,
-                status: 'unread',
-                priority: 'medium',
+                relatedEntityId:   leaveRequest._id,
+                status:            'unread',
+                priority:          'medium',
                 metadata: {
                     requestId: leaveRequest.requestId,
                     leaveType: leaveRequest.leaveType
@@ -1116,9 +911,9 @@ export const updateLeaveStatus = async (req, res) => {
 
             setTimeout(async () => {
                 await sendMail({
-                    to: employee.personalEmail,
+                    to:      employee.personalEmail,
                     subject: `Leave Request ${status === 'APPROVED' ? 'Approved' : 'Rejected'} - ${updatedLeave.requestId}`,
-                    html: leaveEmailTemplate(
+                    html:    leaveEmailTemplate(
                         status === 'APPROVED' ? 'APPROVED_TO_EMPLOYEE' : 'REJECTED_TO_EMPLOYEE',
                         leaveRequest
                     )
@@ -1131,13 +926,13 @@ export const updateLeaveStatus = async (req, res) => {
             message: `Leave request ${status.toLowerCase()} successfully`,
             data: {
                 requestId: updatedLeave.requestId,
-                status: formatStatus(status),
+                status:    formatStatus(status),
                 updatedBy: {
-                    id: user._id,
+                    id:   user._id,
                     name: `${user.firstName} ${user.lastName}`,
                     role: user.role
                 },
-                comments: comments || null,
+                comments:  comments || null,
                 updatedAt: updatedLeave.updatedAt
             }
         });
@@ -1146,7 +941,7 @@ export const updateLeaveStatus = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error updating leave status',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1163,7 +958,7 @@ export const getLeaveStatistics = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
@@ -1175,41 +970,44 @@ export const getLeaveStatistics = async (req, res) => {
             query.employee = user._id;
         }
 
-        // Salary cycle: 21st of previous month → 20th of current month
-        // Salary cycle: HR-configured start day (default 21)
-        const cyclePolicy = await LeavePolicy.findOne({ isActive: true }).lean();
-        const cycleStartDay = cyclePolicy?.salaryCycle?.startDay ?? 21;
-        const now = new Date();
+        // Salary cycle window
+        const cyclePolicy    = await LeavePolicy.findOne({ isActive: true }).lean();
+        const cycleStartDay  = cyclePolicy?.salaryCycle?.startDay ?? 1;
+        const now            = new Date();
         const cycleStartDate = now.getDate() >= cycleStartDay
             ? new Date(now.getFullYear(), now.getMonth(), cycleStartDay, 0, 0, 0, 0)
             : new Date(now.getFullYear(), now.getMonth() - 1, cycleStartDay, 0, 0, 0, 0);
-        const cycleEndDate = new Date(cycleStartDate.getFullYear(), cycleStartDate.getMonth() + 1, cycleStartDay - 1, 23, 59, 59, 999);
+        const cycleEndDate = new Date(
+            cycleStartDate.getFullYear(),
+            cycleStartDate.getMonth() + 1,
+            cycleStartDay - 1,
+            23, 59, 59, 999
+        );
         query.startDate = { $gte: cycleStartDate, $lte: cycleEndDate };
 
-
         const leaves = await Leave.find(query).lean();
-        const stats = {
-            total: leaves.length,
-            pending: leaves.filter(l => l.status === 'PENDING').length,
+        const stats  = {
+            total:    leaves.length,
+            pending:  leaves.filter(l => l.status === 'PENDING').length,
             approved: leaves.filter(l => l.status === 'APPROVED').length,
             rejected: leaves.filter(l => l.status === 'REJECTED').length,
             byType: {
-                CASUAL: leaves.filter(l => l.leaveType === 'CASUAL').length,
-                SICK: leaves.filter(l => l.leaveType === 'SICK').length,
+                CASUAL:    leaves.filter(l => l.leaveType === 'CASUAL').length,
+                SICK:      leaves.filter(l => l.leaveType === 'SICK').length,
                 MATERNITY: leaves.filter(l => l.leaveType === 'MATERNITY').length,
                 PATERNITY: leaves.filter(l => l.leaveType === 'PATERNITY').length,
-                LOP: leaves.filter(l => l.leaveType === 'LOP').length
+                LOP:       leaves.filter(l => l.leaveType === 'LOP').length
             },
             byDuration: {
-                FULL_DAY: leaves.filter(l => l.leaveDuration === 'FULL_DAY').length,
-                FIRST_HALF: leaves.filter(l => l.leaveDuration === 'FIRST_HALF').length,
+                FULL_DAY:    leaves.filter(l => l.leaveDuration === 'FULL_DAY').length,
+                FIRST_HALF:  leaves.filter(l => l.leaveDuration === 'FIRST_HALF').length,
                 SECOND_HALF: leaves.filter(l => l.leaveDuration === 'SECOND_HALF').length
             },
             byMonth: Array(12).fill(0).map((_, i) => {
                 const monthLeaves = leaves.filter(l => new Date(l.appliedAt).getMonth() === i);
                 return {
-                    month: new Date(year, i).toLocaleString('default', { month: 'short' }),
-                    count: monthLeaves.length,
+                    month:    new Date(year, i).toLocaleString('default', { month: 'short' }),
+                    count:    monthLeaves.length,
                     approved: monthLeaves.filter(l => l.status === 'APPROVED').length,
                     rejected: monthLeaves.filter(l => l.status === 'REJECTED').length
                 };
@@ -1222,14 +1020,14 @@ export const getLeaveStatistics = async (req, res) => {
         return res.json({
             success: true,
             message: 'Leave statistics fetched successfully',
-            data: stats
+            data:    stats
         });
     } catch (error) {
         console.error('getLeaveStatistics error:', error);
         return res.status(500).json({
             success: false,
             message: 'Error fetching statistics',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1239,8 +1037,8 @@ export const getLeaveStatistics = async (req, res) => {
  */
 export const getUpcomingLeaves = async (req, res) => {
     try {
-        const user = req.user;
-        const today = dayjs.utc().startOf('day').toDate();
+        const user      = req.user;
+        const today     = dayjs.utc().startOf('day').toDate();
         const nextMonth = dayjs.utc().add(1, 'month').startOf('day').toDate();
 
         const query = { status: 'APPROVED', startDate: { $gte: today, $lte: nextMonth } };
@@ -1257,15 +1055,15 @@ export const getUpcomingLeaves = async (req, res) => {
         return res.json({
             success: true,
             data: upcomingLeaves.map(leave => ({
-                id: leave._id,
-                requestId: leave.requestId,
-                employeeName: leave.employeeName,
-                leaveType: formatLeaveType(leave.leaveType),
+                id:            leave._id,
+                requestId:     leave.requestId,
+                employeeName:  leave.employeeName,
+                leaveType:     formatLeaveType(leave.leaveType),
                 leaveDuration: formatDuration(leave.leaveDuration),
-                startDate: formatUTCDate(leave.startDate),
-                endDate: formatUTCDate(leave.endDate),
-                totalDays: leave.totalDays,
-                department: leave.department
+                startDate:     formatUTCDate(leave.startDate),
+                endDate:       formatUTCDate(leave.endDate),
+                totalDays:     leave.totalDays,
+                department:    leave.department
             }))
         });
     } catch (error) {
@@ -1273,7 +1071,7 @@ export const getUpcomingLeaves = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching upcoming leaves',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1282,6 +1080,12 @@ export const getUpcomingLeaves = async (req, res) => {
 
 /**
  * POST /api/leaves/permission
+ *
+ * Permission Logic (NEW):
+ *  - 2 hrs/month (per salary cycle).
+ *  - Only 1 hr can be taken per single request.
+ *  - If 1 hr already used, the second 1 hr is still available in the same cycle.
+ *  - If 2 hrs already used, no more permissions until the next cycle.
  */
 export const createPermissionRequest = async (req, res) => {
     try {
@@ -1292,60 +1096,78 @@ export const createPermissionRequest = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
         const { date, fromTime, toTime, reason } = validation.data;
 
-        // ── Calculate duration ────────────────────────────────────────────
+        // ── Calculate duration ─────────────────────────────────────────────
         const [fH, fM] = fromTime.split(':').map(Number);
         const [tH, tM] = toTime.split(':').map(Number);
         const totalMinutes = (tH * 60 + tM) - (fH * 60 + fM);
+
+        if (totalMinutes <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'toTime must be after fromTime'
+            });
+        }
+
         const durationHours = totalMinutes / 60;
-        const hours = Math.floor(totalMinutes / 60);
+
+        // ── Enforce max 1 hr per request ───────────────────────────────────
+        if (durationHours > 1) {
+            return res.status(400).json({
+                success: false,
+                message: 'A single permission request cannot exceed 1 hour. Please split into two separate requests if needed.'
+            });
+        }
+
+        const hours   = Math.floor(totalMinutes / 60);
         const minutes = totalMinutes % 60;
         const durationText = [
-            hours > 0 ? `${hours} hr` : '',
+            hours   > 0 ? `${hours} hr`  : '',
             minutes > 0 ? `${minutes} min` : ''
         ].filter(Boolean).join(' ');
 
-        // ── Fetch policy for cycle startDay ───────────────────────────────
-        const policy = await LeavePolicy.findOne({ isActive: true }).lean();
-        const startDay = policy?.salaryCycle?.startDay ?? 1;
-        const maxPermHours = policy?.permissionLeave?.hoursPerMonth ?? 2;
+        // ── Fetch policy ───────────────────────────────────────────────────
+        const policy            = await LeavePolicy.findOne({ isActive: true }).lean();
+        const startDay          = policy?.salaryCycle?.startDay ?? 1;
+        const maxPermHours      = policy?.permissionLeave?.hoursPerMonth ?? 2;
 
-        // ── Get cycle period for the requested date ───────────────────────
-        const requestDate = parseUTCDate(date);
-        const cyclePeriod = getCyclePeriodForDate(dayjs.utc(requestDate), startDay);
-        const cycleStart = cyclePeriod.start.toDate();
-        const cycleEnd = cyclePeriod.end.toDate();
+        // ── Get cycle for the requested date ───────────────────────────────
+        const requestDate  = parseUTCDate(date);
+        const cyclePeriod  = getCycleForDate(dayjs.utc(requestDate), startDay);
+        const cycleStart   = cyclePeriod.start.toDate();
+        const cycleEnd     = cyclePeriod.end.toDate();
 
-        // ── Check how many hours used this cycle month ────────────────────
+        // ── Check total hours used this cycle ──────────────────────────────
         const existingThisCycle = await Permission.find({
             employee: user._id,
-            date: { $gte: cycleStart, $lte: cycleEnd },
-            status: { $in: ['PENDING', 'APPROVED'] }
+            date:     { $gte: cycleStart, $lte: cycleEnd },
+            status:   { $in: ['PENDING', 'APPROVED'] }
         }).lean();
 
-        const usedHours = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
-        const remainingHours = maxPermHours - usedHours;
+        const usedHours      = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
+        const remainingHours = parseFloat((maxPermHours - usedHours).toFixed(2));
 
         if (remainingHours <= 0) {
             return res.status(400).json({
                 success: false,
-                message: `You have used your full ${maxPermHours}-hour permission quota for the cycle period (${cyclePeriod.start.format('DD MMM')} – ${cyclePeriod.end.format('DD MMM YYYY')}). Consider applying for a half-day leave instead.`
+                message: `You have used your full ${maxPermHours}-hour permission quota for this cycle period (${cyclePeriod.start.format('DD MMM')} – ${cyclePeriod.end.format('DD MMM YYYY')}). Consider applying for a half-day leave instead.`
             });
         }
 
         if (durationHours > remainingHours) {
+            const remainingMins = Math.round(remainingHours * 60);
             return res.status(400).json({
                 success: false,
-                message: `You only have ${Math.round(remainingHours * 60)}min of permission remaining this cycle period. Requested ${Math.round(durationHours * 60)}min exceeds your quota.`
+                message: `You only have ${remainingMins} min of permission remaining this cycle period. Requested ${Math.round(durationHours * 60)} min exceeds your quota.`
             });
         }
 
-        // ── Fetch employee ────────────────────────────────────────────────
+        // ── Fetch employee ─────────────────────────────────────────────────
         const employee = await Employee.findById(user._id)
             .select('employeeId firstName lastName department designation officialEmail')
             .lean();
@@ -1353,15 +1175,15 @@ export const createPermissionRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Employee not found' });
         }
 
-        const requestId = await Permission.generateRequestId();
+        const requestId  = await Permission.generateRequestId();
         const permission = new Permission({
             requestId,
-            employee: user._id,
-            employeeId: employee.employeeId,
+            employee:     user._id,
+            employeeId:   employee.employeeId,
             employeeName: `${employee.firstName} ${employee.lastName}`,
-            department: employee.department,
-            designation: employee.designation,
-            date: requestDate,
+            department:   employee.department,
+            designation:  employee.designation,
+            date:         requestDate,
             fromTime,
             toTime,
             durationHours,
@@ -1371,50 +1193,51 @@ export const createPermissionRequest = async (req, res) => {
 
         await permission.save();
 
-        // ── Notify HR/Admin ───────────────────────────────────────────────
+        // ── Notify HR/Admin ────────────────────────────────────────────────
         const hrAdmins = await EmployerUser.find({
-            role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
+            role:     { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true
         });
         for (const hr of hrAdmins) {
             await Notification.create({
-                title: 'New Permission Request',
+                title:       'New Permission Request',
                 description: `${employee.firstName} ${employee.lastName} requested permission on ${formatUTCDate(requestDate)} from ${fromTime} to ${toTime}`,
-                type: 'LEAVE_REQUEST',
-                recipientType: hr.role,
-                recipientId: hr._id,
-                recipientModel: 'EmployerUser',
-                senderId: user._id,
-                senderModel: 'Employee',
+                type:              'LEAVE_REQUEST',
+                recipientType:     hr.role,
+                recipientId:       hr._id,
+                recipientModel:    'EmployerUser',
+                senderId:          user._id,
+                senderModel:       'Employee',
                 relatedEntityType: 'Permission',
-                relatedEntityId: permission._id,
-                status: 'unread',
-                priority: 'low',
-                metadata: { requestId: permission.requestId }
+                relatedEntityId:   permission._id,
+                status:            'unread',
+                priority:          'low',
+                metadata:          { requestId: permission.requestId }
             });
         }
 
-        const usedAfter = parseFloat((usedHours + durationHours).toFixed(2));
+        const usedAfter      = parseFloat((usedHours + durationHours).toFixed(2));
         const remainingAfter = parseFloat((maxPermHours - usedAfter).toFixed(2));
-        const remainMins = Math.round(remainingAfter * 60);
+        const remainMins     = Math.round(remainingAfter * 60);
 
         return res.status(201).json({
             success: true,
             message: remainingAfter > 0
-                ? `Permission submitted (${Math.round(durationHours * 60)}min). ${remainMins}min remaining this cycle period.`
+                ? `Permission submitted (${Math.round(durationHours * 60)} min). ${remainMins} min remaining this cycle period.`
                 : `Permission submitted. You have used your full ${maxPermHours}-hour quota for this cycle period.`,
             data: {
-                requestId: permission.requestId,
-                date: formatUTCDate(permission.date),
-                fromTime: permission.fromTime,
-                toTime: permission.toTime,
-                duration: durationText,
+                requestId:     permission.requestId,
+                date:          formatUTCDate(permission.date),
+                fromTime:      permission.fromTime,
+                toTime:        permission.toTime,
+                duration:      durationText,
                 durationHours: permission.durationHours,
-                usedThisMonth: usedAfter,
-                remainingThisMonth: remainingAfter,
+                usedThisCycle:      usedAfter,
+                remainingThisCycle: remainingAfter,
+                maxPerRequest:      1,
                 cyclePeriod: {
                     start: cyclePeriod.start.format('DD MMM YYYY'),
-                    end: cyclePeriod.end.format('DD MMM YYYY')
+                    end:   cyclePeriod.end.format('DD MMM YYYY')
                 },
                 status: 'Pending',
                 reason: permission.reason
@@ -1425,7 +1248,7 @@ export const createPermissionRequest = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error creating permission request',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1435,10 +1258,10 @@ export const createPermissionRequest = async (req, res) => {
  */
 export const getMyPermissions = async (req, res) => {
     try {
-        const user = req.user;
-        const page = parseInt(req.query.page) || 1;
+        const user  = req.user;
+        const page  = parseInt(req.query.page)  || 1;
         const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+        const skip  = (page - 1) * limit;
 
         const [permissions, total] = await Promise.all([
             Permission.find({ employee: user._id })
@@ -1447,15 +1270,16 @@ export const getMyPermissions = async (req, res) => {
         ]);
 
         const formatted = permissions.map(p => ({
-            id: p._id,
-            requestId: p.requestId,
-            date: formatUTCDate(p.date),
-            fromTime: p.fromTime,
-            toTime: p.toTime,
-            durationHours: p.durationHours,
-            reason: p.reason,
-            status: formatStatus(p.status),
-            appliedAt: p.appliedAt,
+            id:               p._id,
+            requestId:        p.requestId,
+            date:             formatUTCDate(p.date),
+            fromTime:         p.fromTime,
+            toTime:           p.toTime,
+            durationHours:    p.durationHours,
+            durationText:     p.durationText,
+            reason:           p.reason,
+            status:           formatStatus(p.status),
+            appliedAt:        p.appliedAt,
             approvedComments: p.approvedComments,
             rejectedComments: p.rejectedComments
         }));
@@ -1480,7 +1304,7 @@ export const getMyPermissions = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching permissions',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1490,7 +1314,7 @@ export const getMyPermissions = async (req, res) => {
  */
 export const cancelPermissionRequest = async (req, res) => {
     try {
-        const user = req.user;
+        const user        = req.user;
         const { requestId } = req.params;
 
         const permission = await Permission.findOne({ requestId, employee: user._id });
@@ -1511,7 +1335,7 @@ export const cancelPermissionRequest = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error cancelling permission',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1524,9 +1348,9 @@ export const cancelPermissionRequest = async (req, res) => {
 export const getAllPermissions = async (req, res) => {
     try {
         const status = req.query.status || 'ALL';
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+        const page   = parseInt(req.query.page)  || 1;
+        const limit  = parseInt(req.query.limit) || 10;
+        const skip   = (page - 1) * limit;
 
         const query = {};
         if (status !== 'ALL') query.status = status;
@@ -1538,18 +1362,19 @@ export const getAllPermissions = async (req, res) => {
         ]);
 
         const formatted = permissions.map(p => ({
-            id: p._id,
-            requestId: p.requestId,
-            employeeName: p.employeeName,
-            employeeId: p.employeeId,
-            department: p.department,
-            date: formatUTCDate(p.date),
-            fromTime: p.fromTime,
-            toTime: p.toTime,
-            durationHours: p.durationHours,
-            reason: p.reason,
-            status: formatStatus(p.status),
-            appliedAt: p.appliedAt,
+            id:               p._id,
+            requestId:        p.requestId,
+            employeeName:     p.employeeName,
+            employeeId:       p.employeeId,
+            department:       p.department,
+            date:             formatUTCDate(p.date),
+            fromTime:         p.fromTime,
+            toTime:           p.toTime,
+            durationHours:    p.durationHours,
+            durationText:     p.durationText,
+            reason:           p.reason,
+            status:           formatStatus(p.status),
+            appliedAt:        p.appliedAt,
             approvedComments: p.approvedComments,
             rejectedComments: p.rejectedComments
         }));
@@ -1574,7 +1399,7 @@ export const getAllPermissions = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error fetching permissions',
-            error: error.message
+            error:   error.message
         });
     }
 };
@@ -1584,7 +1409,7 @@ export const getAllPermissions = async (req, res) => {
  */
 export const updatePermissionStatus = async (req, res) => {
     try {
-        const user = req.user;
+        const user        = req.user;
         const { requestId } = req.params;
 
         const validation = validateRequest(updatePermissionStatusValidation, req.body);
@@ -1592,7 +1417,7 @@ export const updatePermissionStatus = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: validation.errors
+                errors:  validation.errors
             });
         }
 
@@ -1610,32 +1435,32 @@ export const updatePermissionStatus = async (req, res) => {
         }
 
         if (status === 'APPROVED') {
-            permission.status = 'APPROVED';
-            permission.approvedBy = user._id;
+            permission.status           = 'APPROVED';
+            permission.approvedBy       = user._id;
             permission.approvedComments = comments || null;
-            permission.approvedAt = new Date();
+            permission.approvedAt       = new Date();
         } else {
-            permission.status = 'REJECTED';
-            permission.rejectedBy = user._id;
+            permission.status           = 'REJECTED';
+            permission.rejectedBy       = user._id;
             permission.rejectedComments = comments || null;
-            permission.rejectedAt = new Date();
+            permission.rejectedAt       = new Date();
         }
         await permission.save();
 
         await Notification.create({
-            title: status === 'APPROVED' ? 'Permission Approved' : 'Permission Rejected',
+            title:       status === 'APPROVED' ? 'Permission Approved' : 'Permission Rejected',
             description: `Your permission request (${permission.requestId}) has been ${status.toLowerCase()}${comments ? `. Comments: ${comments}` : ''}`,
-            type: status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
-            recipientType: 'EMPLOYEE',
-            recipientId: permission.employee,
-            recipientModel: 'Employee',
-            senderId: user._id,
-            senderModel: 'EmployerUser',
+            type:              status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
+            recipientType:     'EMPLOYEE',
+            recipientId:       permission.employee,
+            recipientModel:    'Employee',
+            senderId:          user._id,
+            senderModel:       'EmployerUser',
             relatedEntityType: 'Permission',
-            relatedEntityId: permission._id,
-            status: 'unread',
-            priority: 'low',
-            metadata: { requestId: permission.requestId }
+            relatedEntityId:   permission._id,
+            status:            'unread',
+            priority:          'low',
+            metadata:          { requestId: permission.requestId }
         });
 
         return res.json({
@@ -1643,8 +1468,8 @@ export const updatePermissionStatus = async (req, res) => {
             message: `Permission ${status.toLowerCase()} successfully`,
             data: {
                 requestId: permission.requestId,
-                status: formatStatus(status),
-                comments: comments || null
+                status:    formatStatus(status),
+                comments:  comments || null
             }
         });
     } catch (error) {
@@ -1652,25 +1477,18 @@ export const updatePermissionStatus = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Error updating permission status',
-            error: error.message
+            error:   error.message
         });
     }
 };
 
 // ─── Leave Policy CRUD ────────────────────────────────────────────────────────
 
-/**
- * POST /api/leaves/policy
- */
 export const createLeavePolicy = async (req, res) => {
     try {
         const validation = validateRequest(createLeavePolicyValidation, req.body);
         if (!validation.isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: validation.errors
-            });
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: validation.errors });
         }
 
         const existing = await LeavePolicy.findOne({ isActive: true });
@@ -1684,28 +1502,18 @@ export const createLeavePolicy = async (req, res) => {
         const policy = new LeavePolicy({ ...validation.data, createdBy: req.user._id });
         await policy.save();
 
-        return res.status(201).json({
-            success: true,
-            message: 'Leave policy created',
-            data: policy
-        });
+        return res.status(201).json({ success: true, message: 'Leave policy created', data: policy });
     } catch (error) {
         console.error('createLeavePolicy error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-/**
- * GET /api/leaves/policy
- */
 export const getLeavePolicy = async (req, res) => {
     try {
         const policy = await LeavePolicy.findOne({ isActive: true }).lean();
         if (!policy) {
-            return res.status(404).json({
-                success: false,
-                message: 'No active leave policy found'
-            });
+            return res.status(404).json({ success: false, message: 'No active leave policy found' });
         }
         return res.json({ success: true, data: policy });
     } catch (error) {
@@ -1714,18 +1522,11 @@ export const getLeavePolicy = async (req, res) => {
     }
 };
 
-/**
- * PATCH /api/leaves/policy/:id
- */
 export const updateLeavePolicy = async (req, res) => {
     try {
         const validation = validateRequest(updateLeavePolicyValidation, req.body);
         if (!validation.isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: validation.errors
-            });
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: validation.errors });
         }
 
         const policy = await LeavePolicy.findByIdAndUpdate(
@@ -1744,9 +1545,6 @@ export const updateLeavePolicy = async (req, res) => {
     }
 };
 
-/**
- * DELETE /api/leaves/policy/:id
- */
 export const deleteLeavePolicy = async (req, res) => {
     try {
         await LeavePolicy.findByIdAndDelete(req.params.id);
@@ -1759,92 +1557,63 @@ export const deleteLeavePolicy = async (req, res) => {
 
 // ─── Holiday CRUD ─────────────────────────────────────────────────────────────
 
-/**
- * POST /api/leaves/holidays
- */
 export const createHoliday = async (req, res) => {
     try {
         const validation = validateRequest(createHolidayValidation, req.body);
         if (!validation.isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: validation.errors
-            });
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: validation.errors });
         }
 
         const { name, date, type, description, isRecurring } = validation.data;
         const dateObj = parseUTCDate(date);
 
         const holiday = new Holiday({
-            name: name.trim(),
-            date: dateObj,
-            year: dayjs.utc(dateObj).year(),
-            type: type || 'GOVERNMENT',
+            name:        name.trim(),
+            date:        dateObj,
+            year:        dayjs.utc(dateObj).year(),
+            type:        type        || 'GOVERNMENT',
             description: description || '',
             isRecurring: isRecurring || false,
-            createdBy: req.user._id
+            createdBy:   req.user._id
         });
         await holiday.save();
 
-        return res.status(201).json({
-            success: true,
-            message: 'Holiday created',
-            data: holiday
-        });
+        return res.status(201).json({ success: true, message: 'Holiday created', data: holiday });
     } catch (error) {
         console.error('createHoliday error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-/**
- * GET /api/leaves/holidays
- */
 export const getHolidays = async (req, res) => {
     try {
-        const year = parseInt(req.query.year) || dayjs.utc().year();
+        const year  = parseInt(req.query.year) || dayjs.utc().year();
         const query = { year };
         if (req.query.type) query.type = req.query.type;
 
         const holidays = await Holiday.find(query).sort({ date: 1 }).lean();
-        return res.json({
-            success: true,
-            data: holidays,
-            total: holidays.length
-        });
+        return res.json({ success: true, data: holidays, total: holidays.length });
     } catch (error) {
         console.error('getHolidays error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-/**
- * PUT /api/leaves/holidays/:id
- */
 export const updateHoliday = async (req, res) => {
     try {
         const validation = validateRequest(updateHolidayValidation, req.body);
         if (!validation.isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: validation.errors
-            });
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: validation.errors });
         }
 
         const updateData = { ...validation.data, updatedBy: req.user._id };
         if (updateData.date) {
-            const dateObj = parseUTCDate(updateData.date);
-            updateData.date = dateObj;
-            updateData.year = dayjs.utc(dateObj).year();
+            const dateObj       = parseUTCDate(updateData.date);
+            updateData.date     = dateObj;
+            updateData.year     = dayjs.utc(dateObj).year();
         }
 
-        const holiday = await Holiday.findByIdAndUpdate(
-            req.params.id,
-            updateData,
-            { new: true }
-        );
+        const holiday = await Holiday.findByIdAndUpdate(req.params.id, updateData, { new: true });
         if (!holiday) {
             return res.status(404).json({ success: false, message: 'Holiday not found' });
         }
@@ -1856,9 +1625,6 @@ export const updateHoliday = async (req, res) => {
     }
 };
 
-/**
- * DELETE /api/leaves/holidays/:id
- */
 export const deleteHoliday = async (req, res) => {
     try {
         await Holiday.findByIdAndDelete(req.params.id);

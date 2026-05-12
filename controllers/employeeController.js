@@ -117,7 +117,7 @@ const generateAuthToken = (user) => {
 // Create a new employee (ADMIN/HR only)
 export const createEmployee = async (req, res) => {
     try {
-        // Check if user has permission (ADMIN or HR)
+        // Check permission
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({
                 success: false,
@@ -126,7 +126,10 @@ export const createEmployee = async (req, res) => {
         }
 
         // Validate request body
-        const { error, value } = createEmployeeSchema.validate(req.body);
+        const { error, value } = createEmployeeSchema.validate(req.body, {
+            abortEarly: false,
+            stripUnknown: true
+        });
 
         if (error) {
             return res.status(400).json({
@@ -136,8 +139,16 @@ export const createEmployee = async (req, res) => {
             });
         }
 
+        // Convert DOJ to Date object
+        if (value.doj) {
+            value.doj = new Date(value.doj);
+        }
+
         // Check if employee ID already exists
-        const existingEmployeeId = await Employee.findOne({ employeeId: value?.employeeId });
+        const existingEmployeeId = await Employee.findOne({
+            employeeId: value.employeeId
+        });
+
         if (existingEmployeeId) {
             return res.status(400).json({
                 success: false,
@@ -145,8 +156,11 @@ export const createEmployee = async (req, res) => {
             });
         }
 
-        // Check if official email already exists
-        const existingOfficialEmail = await Employee.findOne({ officialEmail: value?.officialEmail });
+        // Check official email
+        const existingOfficialEmail = await Employee.findOne({
+            officialEmail: value.officialEmail
+        });
+
         if (existingOfficialEmail) {
             return res.status(400).json({
                 success: false,
@@ -154,9 +168,12 @@ export const createEmployee = async (req, res) => {
             });
         }
 
-        // Check if personal email already exists (if provided)
-        if (value?.personalEmail) {
-            const existingPersonalEmail = await Employee.findOne({ personalEmail: value?.personalEmail });
+        // Check personal email
+        if (value.personalEmail) {
+            const existingPersonalEmail = await Employee.findOne({
+                personalEmail: value.personalEmail
+            });
+
             if (existingPersonalEmail) {
                 return res.status(400).json({
                     success: false,
@@ -165,42 +182,62 @@ export const createEmployee = async (req, res) => {
             }
         }
 
-        // Hash official password
+        // Hash password
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(value?.officialPassword, salt);
+        const hashedPassword = await bcrypt.hash(
+            value.officialPassword,
+            salt
+        );
 
-        // Create new employee
+        // Create employee
         const employee = new Employee({
             ...value,
             officialPassword: hashedPassword,
-            // Additional fields to track creation
+
             createdBy: {
                 userId: req.user._id,
                 userEmail: req.user.email,
                 role: req.user.role
             },
-            // Default values
+
             role: 'Employee',
             isActive: true
         });
 
         await employee.save();
 
-        setTimeout(async () => {
-            await sendMail({
-                to: employee.personalEmail,
-                subject: `Welcome to ${process.env.COMPANY_NAME} - Employee Portal Access`,
-                html: newEmployeeTemplate(employee, value?.officialPassword)
-            });
-        }, 2000);
+        // Send welcome email
+        if (employee.personalEmail) {
+            setTimeout(async () => {
+                try {
+                    await sendMail({
+                        to: employee.personalEmail,
+                        subject: `Welcome to ${process.env.COMPANY_NAME} - Employee Portal Access`,
+                        html: newEmployeeTemplate(
+                            employee,
+                            value.officialPassword
+                        )
+                    });
+                } catch (mailError) {
+                    console.error('Mail send error:', mailError.message);
+                }
+            }, 2000);
+        }
 
-        // After successful employee creation, create notification
-        await NotificationService.createEmployeeCreatedNotification(employee, req.user);
+        // Create notification
+        await NotificationService.createEmployeeCreatedNotification(
+            employee,
+            req.user
+        );
 
-        // Also notify all HR/Admin users
+        // Notify HR/Admin users
         const hrAdmins = await EmployerUser.find({
-            role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
-            _id: { $ne: req.user._id },
+            role: {
+                $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN']
+            },
+            _id: {
+                $ne: req.user._id
+            },
             isActive: true
         });
 
@@ -223,7 +260,7 @@ export const createEmployee = async (req, res) => {
             });
         }
 
-        // Return employee without password
+        // Remove password from response
         const employeeResponse = employee.toJSON();
 
         return res.status(201).json({
@@ -231,13 +268,17 @@ export const createEmployee = async (req, res) => {
             message: 'Employee created successfully',
             data: employeeResponse
         });
+
     } catch (error) {
-        console.error('Create employee error:', error?.message);
+        console.error('Create employee error:', error);
 
         return res.status(500).json({
             success: false,
             message: 'Server error',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            error:
+                process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : undefined
         });
     }
 };
@@ -866,6 +907,7 @@ export const updateEmployeeByAdmin = async (req, res) => {
 
         const { id } = req.params;
 
+        // Validate ObjectId
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({
                 success: false,
@@ -873,8 +915,15 @@ export const updateEmployeeByAdmin = async (req, res) => {
             });
         }
 
-        // Validate body
-        const { error, value } = updateEmployeeByAdminSchema.validate(req.body);
+        // Validate request body
+        const { error, value } = updateEmployeeByAdminSchema.validate(
+            req.body,
+            {
+                abortEarly: false,
+                stripUnknown: true
+            }
+        );
+
         if (error) {
             return res.status(400).json({
                 success: false,
@@ -883,7 +932,14 @@ export const updateEmployeeByAdmin = async (req, res) => {
             });
         }
 
+        // Convert DOJ to Date
+        if (value.doj) {
+            value.doj = new Date(value.doj);
+        }
+
+        // Find employee
         const employee = await Employee.findById(id);
+
         if (!employee) {
             return res.status(404).json({
                 success: false,
@@ -893,12 +949,16 @@ export const updateEmployeeByAdmin = async (req, res) => {
 
         const hadUpdateRequest = employee.updateRequested;
 
-        // ✅ UNIQUE CHECKS (BEFORE UPDATE)
-        if (value.personalEmail && value.personalEmail !== employee.personalEmail) {
+        // PERSONAL EMAIL UNIQUE CHECK
+        if (
+            value.personalEmail &&
+            value.personalEmail !== employee.personalEmail
+        ) {
             const exists = await Employee.findOne({
                 personalEmail: value.personalEmail,
                 _id: { $ne: id }
             });
+
             if (exists) {
                 return res.status(400).json({
                     success: false,
@@ -907,11 +967,34 @@ export const updateEmployeeByAdmin = async (req, res) => {
             }
         }
 
-        if (value.aadhaarNumber && value.aadhaarNumber !== employee.aadhaarNumber) {
+        // OFFICIAL EMAIL UNIQUE CHECK
+        if (
+            value.officialEmail &&
+            value.officialEmail !== employee.officialEmail
+        ) {
+            const exists = await Employee.findOne({
+                officialEmail: value.officialEmail,
+                _id: { $ne: id }
+            });
+
+            if (exists) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Official email already exists'
+                });
+            }
+        }
+
+        // AADHAAR UNIQUE CHECK
+        if (
+            value.aadhaarNumber &&
+            value.aadhaarNumber !== employee.aadhaarNumber
+        ) {
             const exists = await Employee.findOne({
                 aadhaarNumber: value.aadhaarNumber,
                 _id: { $ne: id }
             });
+
             if (exists) {
                 return res.status(400).json({
                     success: false,
@@ -920,11 +1003,16 @@ export const updateEmployeeByAdmin = async (req, res) => {
             }
         }
 
-        if (value.panNumber && value.panNumber !== employee.panNumber) {
+        // PAN UNIQUE CHECK
+        if (
+            value.panNumber &&
+            value.panNumber !== employee.panNumber
+        ) {
             const exists = await Employee.findOne({
                 panNumber: value.panNumber,
                 _id: { $ne: id }
             });
+
             if (exists) {
                 return res.status(400).json({
                     success: false,
@@ -933,11 +1021,16 @@ export const updateEmployeeByAdmin = async (req, res) => {
             }
         }
 
-        if (value.drivingLicenseNumber && value.drivingLicenseNumber !== employee.drivingLicenseNumber) {
+        // DRIVING LICENSE UNIQUE CHECK
+        if (
+            value.drivingLicenseNumber &&
+            value.drivingLicenseNumber !== employee.drivingLicenseNumber
+        ) {
             const exists = await Employee.findOne({
                 drivingLicenseNumber: value.drivingLicenseNumber,
                 _id: { $ne: id }
             });
+
             if (exists) {
                 return res.status(400).json({
                     success: false,
@@ -946,21 +1039,36 @@ export const updateEmployeeByAdmin = async (req, res) => {
             }
         }
 
-        // ✅ FINAL UPDATE DATA
+        // Hash password if updating
+        if (value.officialPassword) {
+            const salt = await bcrypt.genSalt(10);
+
+            value.officialPassword = await bcrypt.hash(
+                value.officialPassword,
+                salt
+            );
+        }
+
+        // Final update object
         const updateData = {
             ...value,
             lastUpdatedBy: req.user._id,
             lastUpdatedAt: new Date(),
             updateRequested: false,
-            updateRequestReason: undefined
+            updateRequestReason: null
         };
 
+        // Update employee
         const updatedEmployee = await Employee.findByIdAndUpdate(
             id,
             { $set: updateData },
-            { new: true, runValidators: true }
+            {
+                new: true,
+                runValidators: true
+            }
         ).select('-officialPassword');
 
+        // Notify employee if request approved
         if (hadUpdateRequest) {
             await NotificationService.createEmployeeUpdateApprovedNotification(
                 updatedEmployee,
@@ -977,8 +1085,10 @@ export const updateEmployeeByAdmin = async (req, res) => {
     } catch (error) {
         console.error('Update employee by admin error:', error);
 
+        // Duplicate key error
         if (error.code === 11000) {
             const field = Object.keys(error.keyPattern)[0];
+
             return res.status(400).json({
                 success: false,
                 message: `${field} already exists`
@@ -988,7 +1098,10 @@ export const updateEmployeeByAdmin = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Server error',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            error:
+                process.env.NODE_ENV === 'development'
+                    ? error.message
+                    : undefined
         });
     }
 };
