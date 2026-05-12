@@ -117,8 +117,7 @@ export const createLeaveRequest = async (req, res) => {
         const validatedData = validation.data;
 
         const employee = await Employee.findById(user._id)
-            .select('employeeId firstName lastName department designation officialEmail isPermanentEmp createdAt')
-            .lean();
+.select('employeeId firstName lastName department designation officialEmail isPermanentEmp doj createdAt')            .lean();
         if (!employee) {
             return res.status(404).json({ success: false, message: 'Employee not found' });
         }
@@ -185,19 +184,20 @@ export const createLeaveRequest = async (req, res) => {
     const policy = await LeavePolicy.findOne({ isActive: true }).lean();
     const salaryCycleStartDay = policy?.salaryCycle?.startDay ?? 21;
     const currentYear = dayjs.utc().year();
-    const dojDate = employee.doj || employee.createdAt;
-    
+const dojDate = employee.doj || employee.createdAt;
+    console.log('DOJ DATE:', dojDate, 'employee.doj:', employee.doj, 'createdAt:', employee.createdAt);    
     // Use allocateCLForLeave (not Optimized)
-    const allocation = await allocateCLForLeave(
+const allocation = await allocateCLForLeave(
         user._id,
         dojDate,
         startDateObj,
         endDateObj,
         requestedDays,
         salaryCycleStartDay,
-        currentYear
+        currentYear,
+        null  // excludeLeaveId — not needed for new leaves
     );
-    
+    console.log('ALLOCATION RESULT:', JSON.stringify(allocation));    
     clDays = allocation.clDays;
     lopDays = allocation.lopDays;
     isSplit = allocation.isSplit;
