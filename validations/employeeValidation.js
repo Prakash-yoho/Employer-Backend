@@ -697,13 +697,13 @@ export const updateEmployeeByAdminSchema = Joi.object({
 
 
     annualSalary: Joi.number()
-        .min(0)
-        .required()
-        .messages({
-            "number.base": "Annual salary must be a number",
-            "number.min": "Annual salary cannot be negative",
-            "any.required": "Annual salary is required"
-        }),
+    .min(0)
+    .optional()
+    .empty("")
+    .messages({
+        "number.base": "Annual salary must be a number",
+        "number.min": "Annual salary cannot be negative",
+    }),
 
     isPermanentEmp: Joi.boolean()
         .optional()

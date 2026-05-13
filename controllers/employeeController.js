@@ -327,7 +327,7 @@ export const employeeLogin = async (req, res) => {
         // Generate tokens
         const token = generateAuthToken(employee);
 
-        await employee.save();
+        // await employee.save();
 
         // Return employee without password
         const employeeResponse = employee.toJSON();
