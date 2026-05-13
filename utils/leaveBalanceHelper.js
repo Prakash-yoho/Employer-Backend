@@ -162,22 +162,34 @@ export const allocateCLForLeave = async (
     try {
         const dojDate = dayjs.utc(doj);
 
-        // Load ALL existing CASUAL leaves (approved/pending) for a broad window
-        const fetchStart = dayjs.utc(`${year - 1}-12-01`).startOf('day').toDate();
-        const fetchEnd = dayjs.utc(`${year + 1}-01-31`).endOf('day').toDate();
-
+        // Fetch ALL existing CL leaves (no date restriction)
         const matchQuery = {
             employee: employeeId,
             leaveType: 'CASUAL',
             status: { $in: ['APPROVED', 'PENDING'] },
-            startDate: { $gte: fetchStart, $lte: fetchEnd },
         };
-        if (excludeLeaveId) {
-            matchQuery._id = { $ne: excludeLeaveId };
-        }
+        if (excludeLeaveId) matchQuery._id = { $ne: excludeLeaveId };
         const existingLeaves = await Leave.find(matchQuery).lean();
 
-        // Split the requested leave by cycle
+        // ── Annual CL pool ────────────────────────────────────────────────
+        // Total CL that will be earned by end of year (Dec cycle)
+        const decCycle = getCycleForDate(dayjs.utc(`${year}-12-15`), startDay);
+        const annualCLPool = calculateTotalCLEarned(
+            dojDate, decCycle.cycleYear, decCycle.cycleMonth, startDay
+        );
+
+        // Total CL already consumed by ALL existing leaves (entire year)
+        let totalCLUsedAllYear = 0;
+        for (const leave of existingLeaves) {
+            totalCLUsedAllYear += leave.isSplit
+                ? (leave.clDays || 0)
+                : leave.totalDays;
+        }
+
+        // Remaining annual CL pool available for this new leave
+        const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
+
+        // ── Split leave by cycles ─────────────────────────────────────────
         const leaveCycles = splitLeaveByCycles(startDate, endDate, startDay);
 
         let totalClDays = 0;
@@ -185,54 +197,44 @@ export const allocateCLForLeave = async (
         const cycleAllocations = [];
 
         for (const seg of leaveCycles) {
-            // CL earned UP TO AND INCLUDING this segment's cycle
-            const leaveCycle = getCycleForDate(dayjs.utc(endDate), startDay);
-            const leaveCycleKey = getCycleNumber(leaveCycle.cycleYear, leaveCycle.cycleMonth);
             const segCycleKey = getCycleNumber(seg.cycleYear, seg.cycleMonth);
 
-            // Use the smaller of: this segment's cycle vs leave end cycle
-            // (never count CL beyond what's earned by the leave end date)
-            const effectiveCycleYear = segCycleKey <= leaveCycleKey ? seg.cycleYear : leaveCycle.cycleYear;
-            const effectiveCycleMonth = segCycleKey <= leaveCycleKey ? seg.cycleMonth : leaveCycle.cycleMonth;
-
-            const earnedUpToNow = calculateTotalCLEarned(
-                dojDate, effectiveCycleYear, effectiveCycleMonth, startDay
-            );
-
-            // CL already used in cycles STRICTLY BEFORE this segment's cycle
-            let usedBeforeThisCycle = 0;
-            for (const leave of existingLeaves) {
-                if (leave.leaveType !== 'CASUAL') continue;
-                const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-                const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-                if (lcKey < seg.cycleKey) {
-                    usedBeforeThisCycle += leave.isSplit
-                        ? (leave.clDays || 0)
-                        : leave.totalDays;
-                }
-            }
-
-            // CL already used IN this cycle (by other leaves, not this one)
+            // CL already used in THIS cycle by other leaves
             let usedInThisCycle = 0;
             for (const leave of existingLeaves) {
-                if (leave.leaveType !== 'CASUAL') continue;
                 const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
                 const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-                if (lcKey === seg.cycleKey) {
+                if (lcKey === segCycleKey) {
                     usedInThisCycle += leave.isSplit
                         ? (leave.clDays || 0)
                         : leave.totalDays;
                 }
             }
 
-            // Available for this specific cycle segment:
-            //   total earned up to this cycle  –  used before this cycle  –  used in this cycle
-            const alreadyConsumed = usedBeforeThisCycle + usedInThisCycle + totalClDays; // totalClDays = CL already allocated to earlier segments of THIS leave
-            const globalAvailable = Math.max(0, earnedUpToNow - alreadyConsumed + totalClDays);
-            // Re-derive: available = earnedUpToNow - usedBeforeThisCycle - usedInThisCycle - clAllocatedToPriorSegments
-            const clAllocatedPrior = totalClDays;
-            const availableForSeg = Math.max(0, earnedUpToNow - usedBeforeThisCycle - usedInThisCycle - clAllocatedPrior);
+            // Each cycle gives max 1 CL quota
+            // But also bounded by annual pool remaining
+            const earnedUpToSeg = calculateTotalCLEarned(
+                dojDate, seg.cycleYear, seg.cycleMonth, startDay
+            );
 
+            let usedBeforeThisCycle = 0;
+            for (const leave of existingLeaves) {
+                const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+                const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
+                if (lcKey < segCycleKey) {
+                    usedBeforeThisCycle += leave.isSplit
+                        ? (leave.clDays || 0)
+                        : leave.totalDays;
+                }
+            }
+
+            const cycleAvailable = Math.max(
+                0,
+                earnedUpToSeg - usedBeforeThisCycle - usedInThisCycle - totalClDays
+            );
+
+            const annualPoolRemaining = Math.max(0, annualCLAvailable - totalClDays);
+            const availableForSeg = Math.min(cycleAvailable, annualPoolRemaining);
             const clForSeg = Math.min(seg.dayCount, availableForSeg);
             const lopForSeg = seg.dayCount - clForSeg;
 
@@ -240,7 +242,7 @@ export const allocateCLForLeave = async (
             totalLopDays += lopForSeg;
 
             cycleAllocations.push({
-                cycleKey: seg.cycleKey,
+                cycleKey: segCycleKey,
                 cycleLabel: seg.cycleLabel,
                 daysInCycle: seg.dayCount,
                 clAllocated: clForSeg,
@@ -252,39 +254,25 @@ export const allocateCLForLeave = async (
         totalLopDays = parseFloat(totalLopDays.toFixed(2));
         const isSplit = totalClDays > 0 && totalLopDays > 0;
 
-        // Build splitNote
         let splitNote = null;
         if (isSplit) {
-            if (cycleAllocations.length > 1) {
-                splitNote = cycleAllocations
-                    .map(c => `${c.cycleLabel}: ${c.clAllocated} CL + ${c.lopAllocated} LOP`)
-                    .join('; ');
-            } else {
-                splitNote = `${totalClDays} CL + ${totalLopDays} LOP`;
-            }
+            splitNote = cycleAllocations.length > 1
+                ? cycleAllocations.map(c =>
+                    `${c.cycleLabel}: ${c.clAllocated} CL + ${c.lopAllocated} LOP`
+                ).join('; ')
+                : `${totalClDays} CL + ${totalLopDays} LOP`;
         }
 
         console.log('allocateCLForLeave result:', {
-            requestedDays, totalClDays, totalLopDays, isSplit, cycleAllocations
+            requestedDays, totalClDays, totalLopDays, isSplit,
+            annualCLPool, totalCLUsedAllYear, annualCLAvailable, cycleAllocations
         });
 
-        return {
-            clDays: totalClDays,
-            lopDays: totalLopDays,
-            isSplit,
-            splitNote,
-            cycleAllocations,
-        };
+        return { clDays: totalClDays, lopDays: totalLopDays, isSplit, splitNote, cycleAllocations };
 
     } catch (error) {
         console.error('Error in allocateCLForLeave:', error);
-        return {
-            clDays: 0,
-            lopDays: requestedDays,
-            isSplit: false,
-            splitNote: null,
-            cycleAllocations: [],
-        };
+        return { clDays: 0, lopDays: requestedDays, isSplit: false, splitNote: null, cycleAllocations: [] };
     }
 };
 
@@ -376,8 +364,8 @@ export const calculateLeaveBalance = async (
 
         const approvedLeaves = await Leave.find({
             employee: employeeId,
+            leaveType: 'CASUAL',
             status: { $in: ['APPROVED', 'PENDING'] },
-            startDate: { $gte: fetchStart, $lte: fetchEnd },
         }).lean();
 
         // ── Current cycle ────────────────────────────────────────────────────
@@ -390,14 +378,13 @@ export const calculateLeaveBalance = async (
         );
 
         // ── Total CL used globally ───────────────────────────────────────────
+        // Replace the clUsedTotal block:
         let clUsedTotal = 0;
         for (const leave of approvedLeaves) {
-            if (leave.leaveType !== 'CASUAL') continue;
             clUsedTotal += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
         }
-        const clRemaining = Math.max(0, totalEarnedNow - clUsedTotal);
-
-        // ── Monthly breakdown (one entry per calendar month) ─────────────────
+        const clRemaining = Math.max(0, totalEarnedNow - clUsedTotal);        // ── Monthly breakdown (one entry per calendar month) ─────────────────
+        // In calculateLeaveBalance, replace the entire monthlyBreakdown loop:
         const monthlyBreakdown = [];
         for (let m = 0; m <= 11; m++) {
             const probeDate = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-15`);
@@ -406,11 +393,11 @@ export const calculateLeaveBalance = async (
 
             const earnedUpTo = calculateTotalCLEarned(doj, cycle.cycleYear, cycle.cycleMonth, startDay);
 
-            // CL used across all cycles up to and including this one
+            // CL used in cycles up to and including this one
             let usedUpToCycle = 0;
             for (const leave of approvedLeaves) {
-                if (leave.leaveType !== 'CASUAL') continue;
-                const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+                const leaveStartDate = dayjs.utc(leave.startDate).format('YYYY-MM-DD'); // normalize
+                const lc = getCycleForDate(dayjs.utc(leaveStartDate), startDay);
                 const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
                 if (lcKey <= cycleKey) {
                     usedUpToCycle += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
@@ -420,8 +407,8 @@ export const calculateLeaveBalance = async (
             // CL used in exactly this cycle
             let usedInThisCycle = 0;
             for (const leave of approvedLeaves) {
-                if (leave.leaveType !== 'CASUAL') continue;
-                const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+                const leaveStartDate = dayjs.utc(leave.startDate).format('YYYY-MM-DD');
+                const lc = getCycleForDate(dayjs.utc(leaveStartDate), startDay);
                 const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
                 if (lcKey === cycleKey) {
                     usedInThisCycle += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
@@ -432,20 +419,19 @@ export const calculateLeaveBalance = async (
             const isCurrent = cycleKey === currentCycleKey;
             const isEarned = earnedUpTo > 0 && !isFuture;
 
-            // Remaining = total earned up to this cycle − total used up to this cycle
             const remainingUpTo = Math.max(0, earnedUpTo - usedUpToCycle);
 
             monthlyBreakdown.push({
                 month: probeDate.format('MMMM'),
                 cycleLabel: cycle.cycleLabel,
-                earned: earnedUpTo,          // cumulative
+                earned: earnedUpTo,
                 usedThisCycle: parseFloat(usedInThisCycle.toFixed(2)),
                 usedCumulative: parseFloat(usedUpToCycle.toFixed(2)),
-                remaining: remainingUpTo,        // balance after using all prior
+                remaining: remainingUpTo,
                 isFuture,
                 isCurrent,
                 isEarned,
-                quota: isEarned ? 1 : 0,     // 1 CL unlocked per cycle month
+                quota: isEarned ? 1 : 0,
             });
         }
 
