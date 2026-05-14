@@ -79,15 +79,25 @@ export const getCycleNumber = (cycleYear, cycleMonth) =>
  *   DOJ cycle = Jan 2026 (Dec 21 – Jan 20 contains Jan 15 ✓)
  *   Jan cycle = +1, Feb cycle = +2, … May cycle = +5
  */
+// REPLACE WITH — year-scoped: max 12 per year, resets each year:
 export const calculateTotalCLEarned = (dojDate, targetCycleYear, targetCycleMonth, startDay = 21) => {
     const doj = dayjs.utc(dojDate);
     const dojCycle = getCycleForDate(doj, startDay);
-
     const dojKey = getCycleNumber(dojCycle.cycleYear, dojCycle.cycleMonth);
     const targetKey = getCycleNumber(targetCycleYear, targetCycleMonth);
 
     if (targetKey < dojKey) return 0;
-    return targetKey - dojKey + 1;
+
+    // ── Year boundary: first cycle of the target year ────────────────────
+    // The "leave year" starts from the cycle containing Jan 1 of targetCycleYear
+    const yearStart = getCycleForDate(dayjs.utc(`${targetCycleYear}-01-01`), startDay);
+    const yearStartKey = getCycleNumber(yearStart.cycleYear, yearStart.cycleMonth);
+
+    // Earned from the later of: DOJ cycle OR year-start cycle
+    const effectiveStartKey = Math.max(dojKey, yearStartKey);
+
+    if (targetKey < effectiveStartKey) return 0;
+    return targetKey - effectiveStartKey + 1;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,31 +172,53 @@ export const allocateCLForLeave = async (
     try {
         const dojDate = dayjs.utc(doj);
 
-        const matchQuery = {
-            employee: employeeId,
-            leaveType: 'CASUAL',
-            status: { $in: ['APPROVED', 'PENDING'] },
-        };
-        if (excludeLeaveId) matchQuery._id = { $ne: excludeLeaveId };
-        const existingLeaves = await Leave.find(matchQuery).lean();
+// REPLACE WITH — scope to this year's cycles only, reset each year:
+const matchQuery = {
+    employee: employeeId,
+    leaveType: 'CASUAL',
+    status: { $in: ['APPROVED', 'PENDING'] },
+};
+if (excludeLeaveId) matchQuery._id = { $ne: excludeLeaveId };
+const allExistingLeaves = await Leave.find(matchQuery).lean();
 
-        // ── Annual CL pool ────────────────────────────────────────────────
-        const decCycle = getCycleForDate(dayjs.utc(`${year}-12-15`), startDay);
-        const annualCLPool = calculateTotalCLEarned(
-            dojDate, decCycle.cycleYear, decCycle.cycleMonth, startDay
-        );
+// ── Year boundary: first cycle of this year → last cycle of this year ──
+const firstCycleOfYear = getCycleForDate(
+    dayjs.utc(`${year}-01-${startDay === 1 ? '01' : String(startDay).padStart(2,'0')}`),
+    startDay
+);
+// For startDay=21: Jan 21 → yearStart cycle. But Jan 1–20 belongs to prev year's last cycle.
+// The FIRST cycle of the year is the one containing Jan 1 of this year.
+const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
+const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
 
-        // Total CL already consumed by ALL existing leaves (entire year)
-        let totalCLUsedAllYear = 0;
-        for (const leave of existingLeaves) {
-            totalCLUsedAllYear += leave.isSplit
-                ? (leave.clDays || 0)
-                : leave.totalDays;
-        }
+// Last cycle of year: the cycle containing Dec 31 of this year
+const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-31`), startDay);
+const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
 
-        // ── FIX: Don't cap by earnedToday globally — let per-segment logic handle it
-        // Each cycle segment caps itself to earnedUpToSeg (its own cycle's earned total)
-        const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
+// Only count leaves whose cycle falls within this year's range
+const existingLeaves = allExistingLeaves.filter(leave => {
+    const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+    const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
+    return lcKey >= yearStartKey && lcKey <= yearEndKey;
+});
+
+// ── Annual CL pool = CLs earned in cycles within this year only ──────────
+// yearStartKey to yearEndKey = number of cycles in this year
+const cyclesThisYear = yearEndKey - yearStartKey + 1;
+// But cap by how many cycles employee has been active (from DOJ)
+const dojCycle = getCycleForDate(dojDate, startDay);
+const dojKey = getCycleNumber(dojCycle.cycleYear, dojCycle.cycleMonth);
+const activeFromKey = Math.max(dojKey, yearStartKey);
+const annualCLPool = Math.max(0, yearEndKey - activeFromKey + 1);
+
+let totalCLUsedAllYear = 0;
+for (const leave of existingLeaves) {
+    totalCLUsedAllYear += leave.isSplit
+        ? (leave.clDays || 0)
+        : leave.totalDays;
+}
+
+const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
 
         // ── Split leave by cycles ─────────────────────────────────────────
         const leaveCycles = splitLeaveByCycles(startDate, endDate, startDay);
@@ -212,9 +244,9 @@ export const allocateCLForLeave = async (
 
             // CL earned up to and including this segment's cycle
             const earnedUpToSeg = Math.min(
-                calculateTotalCLEarned(dojDate, seg.cycleYear, seg.cycleMonth, startDay),
-                annualCLPool
-            );
+    calculateTotalCLEarned(dojDate, seg.cycleYear, seg.cycleMonth, startDay),
+    annualCLPool
+);
 
             // CL used in cycles BEFORE this one
             let usedBeforeThisCycle = 0;
@@ -363,11 +395,23 @@ export const calculateLeaveBalance = async (
         const fetchEnd = dayjs.utc(`${year + 1}-01-31`).endOf('day').toDate();
 
         // AFTER — fetch ALL leave types for LOP calc:
-        const approvedLeaves = await Leave.find({
-            employee: employeeId,
-            leaveType: 'CASUAL',
-            status: { $in: ['APPROVED', 'PENDING'] },
-        }).lean();
+        // REPLACE WITH — only leaves whose cycle belongs to this year:
+const allCasualLeaves = await Leave.find({
+    employee: employeeId,
+    leaveType: 'CASUAL',
+    status: { $in: ['APPROVED', 'PENDING'] },
+}).lean();
+
+const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
+const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
+const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
+const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
+
+const approvedLeaves = allCasualLeaves.filter(leave => {
+    const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+    const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
+    return lcKey >= yearStartKey && lcKey <= yearEndKey;
+});
 
         // Fetch LOP leaves separately
         const lopLeavesAll = await Leave.find({
@@ -386,10 +430,10 @@ export const calculateLeaveBalance = async (
         );
 
         // ── Total CL used globally ───────────────────────────────────────────
-        // Replace the clUsedTotal block:
-        const decCycle = getCycleForDate(dayjs.utc(`${year}-12-15`), startDay);
-        const annualPool = calculateTotalCLEarned(doj, decCycle.cycleYear, decCycle.cycleMonth, startDay);
-
+// REPLACE WITH — year-scoped pool is always max 12 (or fewer if new hire mid-year):
+const decCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
+const annualPool = calculateTotalCLEarned(doj, decCycle.cycleYear, decCycle.cycleMonth, startDay);
+// annualPool now returns cycles from Jan of this year → Dec of this year (max 12)
         let clUsedTotal = 0;
         for (const leave of approvedLeaves) {
             clUsedTotal += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
