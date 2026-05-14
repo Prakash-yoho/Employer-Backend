@@ -162,7 +162,6 @@ export const allocateCLForLeave = async (
     try {
         const dojDate = dayjs.utc(doj);
 
-        // Fetch ALL existing CL leaves (no date restriction)
         const matchQuery = {
             employee: employeeId,
             leaveType: 'CASUAL',
@@ -172,7 +171,6 @@ export const allocateCLForLeave = async (
         const existingLeaves = await Leave.find(matchQuery).lean();
 
         // ── Annual CL pool ────────────────────────────────────────────────
-        // Total CL that will be earned by end of year (Dec cycle)
         const decCycle = getCycleForDate(dayjs.utc(`${year}-12-15`), startDay);
         const annualCLPool = calculateTotalCLEarned(
             dojDate, decCycle.cycleYear, decCycle.cycleMonth, startDay
@@ -186,7 +184,8 @@ export const allocateCLForLeave = async (
                 : leave.totalDays;
         }
 
-        // Remaining annual CL pool available for this new leave
+        // ── FIX: Don't cap by earnedToday globally — let per-segment logic handle it
+        // Each cycle segment caps itself to earnedUpToSeg (its own cycle's earned total)
         const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
 
         // ── Split leave by cycles ─────────────────────────────────────────
@@ -211,12 +210,13 @@ export const allocateCLForLeave = async (
                 }
             }
 
-            // Each cycle gives max 1 CL quota
-            // But also bounded by annual pool remaining
-            const earnedUpToSeg = calculateTotalCLEarned(
-                dojDate, seg.cycleYear, seg.cycleMonth, startDay
+            // CL earned up to and including this segment's cycle
+            const earnedUpToSeg = Math.min(
+                calculateTotalCLEarned(dojDate, seg.cycleYear, seg.cycleMonth, startDay),
+                annualCLPool
             );
 
+            // CL used in cycles BEFORE this one
             let usedBeforeThisCycle = 0;
             for (const leave of existingLeaves) {
                 const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
@@ -362,9 +362,17 @@ export const calculateLeaveBalance = async (
         const fetchStart = dayjs.utc(`${year - 1}-12-01`).startOf('day').toDate();
         const fetchEnd = dayjs.utc(`${year + 1}-01-31`).endOf('day').toDate();
 
+        // AFTER — fetch ALL leave types for LOP calc:
         const approvedLeaves = await Leave.find({
             employee: employeeId,
             leaveType: 'CASUAL',
+            status: { $in: ['APPROVED', 'PENDING'] },
+        }).lean();
+
+        // Fetch LOP leaves separately
+        const lopLeavesAll = await Leave.find({
+            employee: employeeId,
+            leaveType: 'LOP',
             status: { $in: ['APPROVED', 'PENDING'] },
         }).lean();
 
@@ -379,12 +387,17 @@ export const calculateLeaveBalance = async (
 
         // ── Total CL used globally ───────────────────────────────────────────
         // Replace the clUsedTotal block:
+        const decCycle = getCycleForDate(dayjs.utc(`${year}-12-15`), startDay);
+        const annualPool = calculateTotalCLEarned(doj, decCycle.cycleYear, decCycle.cycleMonth, startDay);
+
         let clUsedTotal = 0;
         for (const leave of approvedLeaves) {
             clUsedTotal += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
         }
-        const clRemaining = Math.max(0, totalEarnedNow - clUsedTotal);        // ── Monthly breakdown (one entry per calendar month) ─────────────────
-        // In calculateLeaveBalance, replace the entire monthlyBreakdown loop:
+        // Cap used at annual pool (can't use more than 12)
+        clUsedTotal = Math.min(clUsedTotal, annualPool);
+        const clUsedEffective = Math.min(clUsedTotal, totalEarnedNow); // cap to what's earned today for display
+        const clRemaining = Math.max(0, totalEarnedNow - clUsedEffective);
         const monthlyBreakdown = [];
         for (let m = 0; m <= 11; m++) {
             const probeDate = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-15`);
@@ -417,10 +430,13 @@ export const calculateLeaveBalance = async (
 
             const isFuture = cycleKey > currentCycleKey;
             const isCurrent = cycleKey === currentCycleKey;
-            const isEarned = earnedUpTo > 0 && !isFuture;
-
-            const remainingUpTo = Math.max(0, earnedUpTo - usedUpToCycle);
-
+            // isEarned = DOJ has passed this cycle (even if future in calendar)
+            const isEarned = earnedUpTo > 0;
+            // REPLACE WITH:
+            const usedUpToCycleCapped = Math.min(usedUpToCycle, earnedUpTo);
+            // For future months: remaining = earnedUpTo (projected) minus used so far
+            // For past/current: remaining = earned up to that cycle minus cumulative used
+            const remainingUpTo = Math.max(0, earnedUpTo - usedUpToCycleCapped);
             monthlyBreakdown.push({
                 month: probeDate.format('MMMM'),
                 cycleLabel: cycle.cycleLabel,
@@ -430,8 +446,8 @@ export const calculateLeaveBalance = async (
                 remaining: remainingUpTo,
                 isFuture,
                 isCurrent,
-                isEarned,
-                quota: isEarned ? 1 : 0,
+                isEarned: earnedUpTo > 0,
+                quota: earnedUpTo > 0 ? 1 : 0,
             });
         }
 
@@ -449,11 +465,11 @@ export const calculateLeaveBalance = async (
         const permRemainingHours = Math.max(0, maxPermHoursPerMonth - permUsedHours);
 
         // ── LOP days (this year) ─────────────────────────────────────────────
-        const lopLeaves = approvedLeaves.filter(l => l.leaveType === 'LOP');
-        const lopDaysTotal = lopLeaves.reduce((s, l) => s + l.totalDays, 0)
+        // AFTER:
+        const lopDaysTotal = lopLeavesAll.reduce((s, l) => s + l.totalDays, 0)
             + approvedLeaves.filter(l => l.isSplit).reduce((s, l) => s + (l.lopDays || 0), 0);
-
         // ── Build response ───────────────────────────────────────────────────
+        // REPLACE WITH:
         const response = {
             year,
             doj: doj.format('YYYY-MM-DD'),
@@ -461,8 +477,10 @@ export const calculateLeaveBalance = async (
             isPermanentEmployee: employee.isPermanentEmp || false,
             casual: {
                 earnedThisYear: totalEarnedNow,
-                usedThisYear: parseFloat(clUsedTotal.toFixed(2)),
+                annualPool: annualPool,
+                usedThisYear: parseFloat(clUsedEffective.toFixed(2)),
                 remainingThisYear: clRemaining,
+                annualRemaining: Math.max(0, annualPool - clUsedTotal),
                 policyNote: '1 CL per salary-cycle month from DOJ; unused days carry forward automatically',
                 monthlyBreakdown: monthlyBreakdown,
             },
@@ -485,10 +503,14 @@ export const calculateLeaveBalance = async (
 
         // Permanent-employee extras
         if (isPermanentEmp) {
-            const sickUsed = approvedLeaves.filter(l => l.leaveType === 'SICK').reduce((s, l) => s + l.totalDays, 0);
-            const maternityUsed = approvedLeaves.filter(l => l.leaveType === 'MATERNITY').reduce((s, l) => s + l.totalDays, 0);
-            const paternityUsed = approvedLeaves.filter(l => l.leaveType === 'PATERNITY').reduce((s, l) => s + l.totalDays, 0);
-
+            const permanentLeaves = await Leave.find({
+                employee: employeeId,
+                leaveType: { $in: ['SICK', 'MATERNITY', 'PATERNITY'] },
+                status: { $in: ['APPROVED', 'PENDING'] },
+            }).lean();
+            const sickUsed = permanentLeaves.filter(l => l.leaveType === 'SICK').reduce((s, l) => s + l.totalDays, 0);
+            const maternityUsed = permanentLeaves.filter(l => l.leaveType === 'MATERNITY').reduce((s, l) => s + l.totalDays, 0);
+            const paternityUsed = permanentLeaves.filter(l => l.leaveType === 'PATERNITY').reduce((s, l) => s + l.totalDays, 0);
             response.sick = {
                 total: slDaysPerYear,
                 used: sickUsed,

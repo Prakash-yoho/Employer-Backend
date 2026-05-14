@@ -1149,10 +1149,39 @@ export const createPermissionRequest = async (req, res) => {
             status:   { $in: ['PENDING', 'APPROVED'] }
         }).lean();
 
-        const usedHours      = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
-        const remainingHours = parseFloat((maxPermHours - usedHours).toFixed(2));
+const usedHours      = existingThisCycle.reduce((sum, p) => sum + (p.durationHours || 0), 0);
+const remainingHours = parseFloat((maxPermHours - usedHours).toFixed(2));
 
-        if (remainingHours <= 0) {
+
+// ─────────────────────────────────────────────────────────────────────────
+// ── Block overlapping time on same date ───────────────────────────────────
+const overlappingPermission = existingThisCycle.find(p => {
+    const pDate = dayjs.utc(p.date).format('YYYY-MM-DD');
+    const reqDate = dayjs.utc(requestDate).format('YYYY-MM-DD');
+    if (pDate !== reqDate) return false;
+    // Check time overlap
+    const [pfH, pfM] = p.fromTime.split(':').map(Number);
+    const [ptH, ptM] = p.toTime.split(':').map(Number);
+    const [rfH, rfM] = fromTime.split(':').map(Number);
+    const [rtH, rtM] = toTime.split(':').map(Number);
+    const pStart = pfH * 60 + pfM;
+    const pEnd   = ptH * 60 + ptM;
+    const rStart = rfH * 60 + rfM;
+    const rEnd   = rtH * 60 + rtM;
+    return rStart < pEnd && rEnd > pStart; // overlap check
+});
+if (overlappingPermission) {
+    return res.status(400).json({
+        success: false,
+        message: `Time slot overlaps with an existing permission on this date (${overlappingPermission.fromTime}–${overlappingPermission.toTime}). Please choose a different time.`
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────
+
+
+
+
+if (remainingHours <= 0) {
             return res.status(400).json({
                 success: false,
                 message: `You have used your full ${maxPermHours}-hour permission quota for this cycle period (${cyclePeriod.start.format('DD MMM')} – ${cyclePeriod.end.format('DD MMM YYYY')}). Consider applying for a half-day leave instead.`
