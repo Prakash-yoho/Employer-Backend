@@ -18,6 +18,7 @@ import itDashboardRoutes from './routes/itDashboardRoutes.js'
 import notificationRoutes from './routes/notificationRoutes.js'
 import employeeDashboardRoutes from './routes/employeeDashboardRoutes.js'
 import leaveRoutes from './routes/leaveRoutes.js'
+import OfficeTimingRoutes from './routes/Officetimingroutes.js'
 import PhaseScheduleRoutes from './routes/PhaseScheduleRoutes.js'
 import projectRoutes from './routes/projectmanagementRoute.js'
 import cors from 'cors'
@@ -79,6 +80,7 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/leaves', leaveRoutes)
+app.use('/api/office-timing', OfficeTimingRoutes)
 app.use("/api/admin/attendance", attendanceRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use('/api/employer/dashboard', dashboardHRAdminRoutes);
