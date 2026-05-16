@@ -56,10 +56,10 @@ export const updateOfficeTiming = async (req, res) => {
     const updatedBy = req.user?.employeeId ?? null;
 
     const update = {};
-    if (startTime    !== undefined) update.startTime    = startTime;
-    if (endTime      !== undefined) update.endTime      = endTime;
+    if (startTime !== undefined) update.startTime = startTime;
+    if (endTime !== undefined) update.endTime = endTime;
     if (graceMinutes !== undefined) update.graceMinutes = Number(graceMinutes);
-    if (updatedBy)                  update.updatedBy    = updatedBy;
+    if (updatedBy) update.updatedBy = updatedBy;
 
     const timing = await OfficeTiming.findOneAndUpdate(
       { key: "default" },
@@ -75,20 +75,28 @@ export const updateOfficeTiming = async (req, res) => {
 
 // ─── GET /api/office-timing/violations ────────────────────────────────────────
 // Query: month (YYYY-MM) | year (YYYY) | date (YYYY-MM-DD)
-// Returns employees with late logins or early logouts in the period.
+// Returns employees with late logins, early logouts, OR missed clock-outs.
+//
+// Missed clock-out logic:
+//   - Employee clocked IN on a past date (not today) but has NO clockOut.
+//   - "Past date" means the date string is before today's YYYY-MM-DD.
+//   - Today's records are excluded because the employee might still be working.
 export const getViolationsReport = async (req, res) => {
   try {
     const { month, year, date } = req.query;
 
     const timing = await getTiming();
-    const cutoffMins   = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
-    const endTimeMins  = hhmmToMinutes(timing.endTime);
+    const cutoffMins = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
+    const endTimeMins = hhmmToMinutes(timing.endTime);
+
+    // Today's date string (YYYY-MM-DD) – used to exclude live records
+    const todayStr = new Date().toISOString().split("T")[0];
 
     // Build date filter
     const filter = {};
-    if (date)       filter.date = date;
+    if (date) filter.date = date;
     else if (month) filter.date = { $regex: `^${month}` };
-    else if (year)  filter.date = { $regex: `^${year}` };
+    else if (year) filter.date = { $regex: `^${year}` };
     else {
       // Default: current month
       const d = new Date();
@@ -98,52 +106,78 @@ export const getViolationsReport = async (req, res) => {
 
     const logs = await Attendance.find(filter).lean();
 
-    // Annotate each log
-    const violations = [];
-    for (const log of logs) {
-      const clockInMins  = timeStrToMinutes(log.clockIn);
-      const clockOutMins = timeStrToMinutes(log.clockOut);
-
-      const isLate        = clockInMins  != null && clockInMins  > cutoffMins;
-      const isEarlyLogout = clockOutMins != null && clockOutMins < endTimeMins;
-
-      if (!isLate && !isEarlyLogout) continue;
-
-      // Fetch employee name (lightweight)
-      const emp = await Employee.findOne({ employeeId: log.employeeId })
+    // Cache employee lookups to avoid N+1 queries
+    const empCache = {};
+    const getEmp = async (empId) => {
+      if (empCache[empId] !== undefined) return empCache[empId];
+      const emp = await Employee.findOne({ employeeId: empId })
         .select("firstName lastName designation department avatar")
         .lean();
+      empCache[empId] = emp ?? null;
+      return empCache[empId];
+    };
+
+    // Annotate each log
+    const violations = [];
+
+    for (const log of logs) {
+      const clockInMins = timeStrToMinutes(log.clockIn);
+      const clockOutMins = timeStrToMinutes(log.clockOut);
+
+      const isLate = clockInMins != null && clockInMins > cutoffMins;
+      const isEarlyLogout = clockOutMins != null && clockOutMins < endTimeMins;
+
+      // Missed clock-out: had a clock-in, no clock-out, and the day is already over
+      const isMissedClockOut =
+        log.clockIn != null &&
+        !log.clockOut &&
+        log.date < todayStr; // strictly past — today is excluded
+
+      if (!isLate && !isEarlyLogout && !isMissedClockOut) continue;
+
+      const emp = await getEmp(log.employeeId);
 
       violations.push({
-        _id:          log._id,
-        employeeId:   log.employeeId,
-        name:         emp ? `${emp.firstName} ${emp.lastName}` : log.employeeId,
-        designation:  emp?.designation ?? "",
-        department:   emp?.department  ?? "",
-        avatar:       emp?.avatar      ?? null,
-        date:         log.date,
-        clockIn:      log.clockIn  ?? null,
-        clockOut:     log.clockOut ?? null,
+        _id: log._id,
+        employeeId: log.employeeId,
+        name: emp ? `${emp.firstName} ${emp.lastName}` : log.employeeId,
+        designation: emp?.designation ?? "",
+        department: emp?.department ?? "",
+        avatar: emp?.avatar ?? null,
+        date: log.date,
+        clockIn: log.clockIn ?? null,
+        clockOut: log.clockOut ?? null,
+
+        // ── Late login ──────────────────────────────────────────────────────
         isLate,
-        isEarlyLogout,
         lateByMinutes: isLate
           ? Math.round(clockInMins - cutoffMins)
           : null,
+
+        // ── Early logout ────────────────────────────────────────────────────
+        isEarlyLogout,
         earlyByMinutes: isEarlyLogout
           ? Math.round(endTimeMins - clockOutMins)
           : null,
+
+        // ── Missed clock-out ────────────────────────────────────────────────
+        isMissedClockOut,
       });
     }
 
-    // Sort: most recent date first, then employeeId
-    violations.sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : a.employeeId.localeCompare(b.employeeId)));
+    // Sort: most recent date first, then by employeeId
+    violations.sort((a, b) =>
+      a.date > b.date ? -1
+        : a.date < b.date ? 1
+          : a.employeeId.localeCompare(b.employeeId)
+    );
 
     return res.status(200).json({
       success: true,
       count: violations.length,
       officeTiming: {
-        startTime:    timing.startTime,
-        endTime:      timing.endTime,
+        startTime: timing.startTime,
+        endTime: timing.endTime,
         graceMinutes: timing.graceMinutes,
       },
       data: violations,

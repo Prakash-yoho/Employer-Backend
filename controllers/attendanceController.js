@@ -71,28 +71,28 @@ async function getOfficeTiming() {
 export const clockIn = async (req, res) => {
   const { employeeId, image, location } = req.body;
   const { date, time } = getNow();
- 
+
   try {
     if (!employeeId)
       return res.status(400).json({ error: "employeeId is required" });
- 
+
     const existing = await Attendance.findOne({ employeeId, date });
     if (existing)
       return res.status(409).json({ error: "Already clocked in today" });
- 
+
     // ── Office timing check ──────────────────────────────────────────────────
-    const timing     = await getOfficeTiming();
+    const timing = await getOfficeTiming();
     const cutoffMins = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
     const clockInMin = timeStrToMinutes(time);
- 
-    const lateLogin     = clockInMin != null && clockInMin > cutoffMins;
+
+    const lateLogin = clockInMin != null && clockInMin > cutoffMins;
     const lateByMinutes = lateLogin ? Math.round(clockInMin - cutoffMins) : null;
- 
+
     const [clockInImage, clockInLocation] = await Promise.all([
       uploadImage(image, "clock-in"),
       Promise.resolve(parseLocation(location)),
     ]);
- 
+
     const attendance = await Attendance.create({
       employeeId,
       date,
@@ -103,13 +103,13 @@ export const clockIn = async (req, res) => {
       lateLogin,
       lateByMinutes,
     });
- 
+
     // Include timing info in response so the client can show a toast/modal
     return res.status(201).json({
       ...attendance.toObject(),
       _officeTiming: {
-        startTime:    timing.startTime,
-        endTime:      timing.endTime,
+        startTime: timing.startTime,
+        endTime: timing.endTime,
         graceMinutes: timing.graceMinutes,
         lateLogin,
         lateByMinutes,
@@ -197,49 +197,49 @@ export const endBreak = async (req, res) => {
 export const clockOut = async (req, res) => {
   const { employeeId, image, location } = req.body;
   const { date, time } = getNow();
- 
+
   try {
     const attendance = await Attendance.findOne({ employeeId, date });
     if (!attendance)
       return res.status(404).json({ error: "No clock-in found for today" });
     if (attendance.clockOut)
       return res.status(409).json({ error: "Already clocked out" });
- 
+
     // Auto-close any open break
     const lastBreak = attendance.breaks.at(-1);
     if (lastBreak && !lastBreak.end) {
       lastBreak.end = time;
       attendance.markModified("breaks");
     }
- 
+
     // ── Office timing check ──────────────────────────────────────────────────
-    const timing        = await getOfficeTiming();
-    const endTimeMins   = hhmmToMinutes(timing.endTime);
-    const clockOutMins  = timeStrToMinutes(time);
- 
-    const earlyLogout    = clockOutMins != null && clockOutMins < endTimeMins;
+    const timing = await getOfficeTiming();
+    const endTimeMins = hhmmToMinutes(timing.endTime);
+    const clockOutMins = timeStrToMinutes(time);
+
+    const earlyLogout = clockOutMins != null && clockOutMins < endTimeMins;
     const earlyByMinutes = earlyLogout
       ? Math.round(endTimeMins - clockOutMins)
       : null;
- 
+
     const [clockOutImage, clockOutLocation] = await Promise.all([
       uploadImage(image, "clock-out"),
       Promise.resolve(parseLocation(location)),
     ]);
- 
-    attendance.clockOut         = time;
-    attendance.clockOutImage    = clockOutImage;
+
+    attendance.clockOut = time;
+    attendance.clockOutImage = clockOutImage;
     attendance.clockOutLocation = clockOutLocation;
-    attendance.earlyLogout      = earlyLogout;
-    attendance.earlyByMinutes   = earlyByMinutes;
- 
+    attendance.earlyLogout = earlyLogout;
+    attendance.earlyByMinutes = earlyByMinutes;
+
     await attendance.save();
- 
+
     return res.json({
       ...attendance.toObject(),
       _officeTiming: {
-        startTime:    timing.startTime,
-        endTime:      timing.endTime,
+        startTime: timing.startTime,
+        endTime: timing.endTime,
         graceMinutes: timing.graceMinutes,
         earlyLogout,
         earlyByMinutes,
@@ -287,11 +287,11 @@ export const getLogs = async (req, res) => {
 
       const fullCalendar = [];
       const cursor = new Date(startDate + "T00:00:00Z");
-      const end    = new Date(endDate   + "T00:00:00Z");
+      const end = new Date(endDate + "T00:00:00Z");
 
       while (cursor <= end) {
         const dateStr = cursor.toISOString().split("T")[0];
-        const dow     = cursor.getUTCDay(); // 0=Sun, 6=Sat
+        const dow = cursor.getUTCDay(); // 0=Sun, 6=Sat
 
         // Skip future dates
         if (dateStr > today) {
@@ -300,7 +300,7 @@ export const getLogs = async (req, res) => {
         }
 
         const isWeekend = dow === 0 || dow === 6;
-        const hDoc      = holidayMap[dateStr] ?? null;
+        const hDoc = holidayMap[dateStr] ?? null;
         const isHoliday = !!hDoc;
 
         if (logMap[dateStr]) {
@@ -309,8 +309,8 @@ export const getLogs = async (req, res) => {
             ? logMap[dateStr].toObject()
             : { ...logMap[dateStr] };
 
-          log.status      = log.clockOut ? "present" : log.clockIn ? "incomplete" : "absent";
-          log.isHoliday   = isHoliday;
+          log.status = log.clockOut ? "present" : log.clockIn ? "incomplete" : "absent";
+          log.isHoliday = isHoliday;
           log.holidayName = isHoliday ? hDoc.name : null;
           log.holidayType = isHoliday ? hDoc.type : null;
           fullCalendar.push(log);
@@ -322,8 +322,8 @@ export const getLogs = async (req, res) => {
           if (isHoliday) {
             const typeLabel = {
               GOVERNMENT: "Government Holiday",
-              OPTIONAL:   "Optional Holiday",
-              COMPANY:    "Company Holiday",
+              OPTIONAL: "Optional Holiday",
+              COMPANY: "Company Holiday",
             }[hDoc.type] ?? "Holiday";
 
             statusLabel = `${hDoc.name} · ${typeLabel}`;
@@ -334,28 +334,28 @@ export const getLogs = async (req, res) => {
           }
 
           fullCalendar.push({
-            _id:        `holiday-${dateStr}`,
+            _id: `holiday-${dateStr}`,
             employeeId: req.query.employeeId,
-            date:       dateStr,
-            status:     "holiday",
+            date: dateStr,
+            status: "holiday",
             holidayType,
             statusLabel,
-            clockIn:    null,
-            clockOut:   null,
-            breaks:     [],
+            clockIn: null,
+            clockOut: null,
+            breaks: [],
           });
 
         } else {
           // Weekday, past/today, no record
           fullCalendar.push({
-            _id:         `absent-${dateStr}`,
-            employeeId:  req.query.employeeId,
-            date:        dateStr,
-            status:      "absent",
+            _id: `absent-${dateStr}`,
+            employeeId: req.query.employeeId,
+            date: dateStr,
+            status: "absent",
             statusLabel: "No attendance marked for the day",
-            clockIn:     null,
-            clockOut:    null,
-            breaks:      [],
+            clockIn: null,
+            clockOut: null,
+            breaks: [],
           });
         }
 
@@ -370,9 +370,9 @@ export const getLogs = async (req, res) => {
     // ── Month view ────────────────────────────────────────────────────────────
     if (req.query.month && !req.query.date) {
       const [year, month] = req.query.month.split("-").map(Number);
-      const daysInMonth   = new Date(year, month, 0).getDate();
-      const startDate     = `${year}-${String(month).padStart(2, "0")}-01`;
-      const endDate       = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+      const endDate = `${year}-${String(month).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
 
       const holidayDocs = await Holiday.find({ year }).lean();
       return res.json(buildCalendar(logs, holidayDocs, startDate, endDate));
@@ -380,9 +380,9 @@ export const getLogs = async (req, res) => {
 
     // ── Year view ─────────────────────────────────────────────────────────────
     if (req.query.year && !req.query.date && !req.query.month) {
-      const year      = parseInt(req.query.year);
+      const year = parseInt(req.query.year);
       const startDate = `${year}-01-01`;
-      const endDate   = `${year}-12-31`;
+      const endDate = `${year}-12-31`;
 
       const holidayDocs = await Holiday.find({ year }).lean();
       return res.json(buildCalendar(logs, holidayDocs, startDate, endDate));
@@ -712,9 +712,58 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       filter.date = { $regex: `^${year}` };
     }
 
+    // ── Read OfficeTiming once for violation messages ─────────────────────────
+    const timing = await getOfficeTiming();
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    // ── Build violations from already-stored fields on the Attendance doc ─────
+    //
+    // The clockIn / clockOut controllers already compute and persist:
+    //   lateLogin, lateByMinutes   (set on clockIn)
+    //   earlyLogout, earlyByMinutes (set on clockOut)
+    //
+    // So we just read those fields — no need to re-parse time strings or
+    // re-apply thresholds here.  Missed clock-out is derived at query time
+    // because it depends on "is the day over yet".
+    //
+    const computeViolations = (log) => {
+      const violations = [];
+
+      // 1. Late login — already computed and stored by clockIn controller
+      if (log.lateLogin) {
+        violations.push({
+          type: "LATE_LOGIN",
+          message: `Late clock-in at ${log.clockIn} — ${log.lateByMinutes}m past ${timing.startTime} (grace: ${timing.graceMinutes}m)`,
+          lateByMinutes: log.lateByMinutes ?? null,
+        });
+      }
+
+      // 2. Missed clock-out — had a clockIn, no clockOut, day is already over
+      if (log.clockIn && !log.clockOut && log.date < todayStr) {
+        violations.push({
+          type: "MISSED_LOGOUT",
+          message: "Clock-out not recorded for this day",
+        });
+      }
+
+      // 3. Early logout — already computed and stored by clockOut controller
+      if (log.earlyLogout) {
+        violations.push({
+          type: "EARLY_LOGOUT",
+          message: `Early clock-out at ${log.clockOut} — ${log.earlyByMinutes}m before ${timing.endTime}`,
+          earlyByMinutes: log.earlyByMinutes ?? null,
+        });
+      }
+
+      return violations;
+      // A day with late login + no clockOut returns [LATE_LOGIN, MISSED_LOGOUT]
+      // A day with late login + early logout returns [LATE_LOGIN, EARLY_LOGOUT]
+      // All three are fully independent — no skipping.
+    };
+
     // ── Full calendar view for month/year (no pagination needed) ─────────────
     if (month || year) {
-      const resolvedYear  = parseInt(year  || new Date().getFullYear());
+      const resolvedYear = parseInt(year || new Date().getFullYear());
       const resolvedMonth = month ? parseInt(month) : null;
 
       const startDate = resolvedMonth
@@ -722,10 +771,10 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
         : `${resolvedYear}-01-01`;
 
       const endDate = resolvedMonth
-        ? `${resolvedYear}-${String(resolvedMonth).padStart(2, "0")}-${String(new Date(resolvedYear, resolvedMonth, 0).getDate()).padStart(2, "0")}`
+        ? `${resolvedYear}-${String(resolvedMonth).padStart(2, "0")}-${String(
+          new Date(resolvedYear, resolvedMonth, 0).getDate()
+        ).padStart(2, "0")}`
         : `${resolvedYear}-12-31`;
-
-      const today = new Date().toISOString().split("T")[0];
 
       // Fetch attendance logs and holidays in parallel
       const [logs, holidayDocs] = await Promise.all([
@@ -747,20 +796,20 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
 
       const fullCalendar = [];
       const cursor = new Date(startDate + "T00:00:00Z");
-      const end    = new Date(endDate   + "T00:00:00Z");
+      const end = new Date(endDate + "T00:00:00Z");
 
       while (cursor <= end) {
         const dateStr = cursor.toISOString().split("T")[0];
-        const dow     = cursor.getUTCDay();
+        const dow = cursor.getUTCDay();
 
         // Skip future dates
-        if (dateStr > today) {
+        if (dateStr > todayStr) {
           cursor.setUTCDate(cursor.getUTCDate() + 1);
           continue;
         }
 
         const isWeekend = dow === 0 || dow === 6;
-        const hDoc      = holidayMap[dateStr] ?? null;
+        const hDoc = holidayMap[dateStr] ?? null;
         const isHoliday = !!hDoc;
 
         if (logMap[dateStr]) {
@@ -771,28 +820,45 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
             return acc + (calcDurationMinutes(b.start, b.end) || 0);
           }, 0);
 
+          const violations = computeViolations(log);
+
+          const attendanceStatus = log.clockOut
+            ? "present"
+            : log.clockIn
+              ? "incomplete"
+              : "absent";
+
           fullCalendar.push({
-            _id:              log._id,
-            date:             log.date,
-            clockIn:          log.clockIn  ?? null,
-            clockOut:         log.clockOut ?? null,
-            clockInLocation:  log.clockInLocation  ?? null,
+            _id: log._id,
+            date: log.date,
+            clockIn: log.clockIn ?? null,
+            clockOut: log.clockOut ?? null,
+            clockInLocation: log.clockInLocation ?? null,
             clockOutLocation: log.clockOutLocation ?? null,
             breaks: log.breaks.map((b) => ({
-              start:         b.start,
-              end:           b.end ?? null,
+              start: b.start,
+              end: b.end ?? null,
               startLocation: b.startLocation,
-              endLocation:   b.endLocation,
-              duration:      calcDurationMinutes(b.start, b.end),
+              endLocation: b.endLocation,
+              duration: calcDurationMinutes(b.start, b.end),
             })),
-            totalBreaks:          log.breaks.length,
-            workDurationMinutes:  workMinutes,
+            totalBreaks: log.breaks.length,
+            workDurationMinutes: workMinutes,
             breakDurationMinutes: totalBreakMinutes,
-            netWorkMinutes:       workMinutes != null ? workMinutes - totalBreakMinutes : null,
-            status:      log.clockOut ? "present" : log.clockIn ? "incomplete" : "absent",
+            netWorkMinutes:
+              workMinutes != null ? workMinutes - totalBreakMinutes : null,
+            status: attendanceStatus,
             isHoliday,
             holidayName: isHoliday ? hDoc.name : null,
             holidayType: isHoliday ? hDoc.type : null,
+            // Raw fields — kept for frontend direct access
+            lateLogin: log.lateLogin ?? false,
+            lateByMinutes: log.lateByMinutes ?? null,
+            earlyLogout: log.earlyLogout ?? false,
+            earlyByMinutes: log.earlyByMinutes ?? null,
+            // Structured violations array
+            violations,
+            hasViolations: violations.length > 0,
           });
 
         } else if (isHoliday || isWeekend) {
@@ -802,8 +868,8 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
           if (isHoliday) {
             const typeLabel = {
               GOVERNMENT: "Government Holiday",
-              OPTIONAL:   "Optional Holiday",
-              COMPANY:    "Company Holiday",
+              OPTIONAL: "Optional Holiday",
+              COMPANY: "Company Holiday",
             }[hDoc.type] ?? "Holiday";
 
             statusLabel = `${hDoc.name} · ${typeLabel}`;
@@ -814,35 +880,47 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
           }
 
           fullCalendar.push({
-            _id:         `holiday-${dateStr}`,
+            _id: `holiday-${dateStr}`,
             employeeId,
-            date:        dateStr,
-            status:      "holiday",
+            date: dateStr,
+            status: "holiday",
             holidayType,
             statusLabel,
-            clockIn:     null,
-            clockOut:    null,
-            breaks:      [],
-            totalBreaks:          0,
-            workDurationMinutes:  null,
+            clockIn: null,
+            clockOut: null,
+            breaks: [],
+            totalBreaks: 0,
+            workDurationMinutes: null,
             breakDurationMinutes: 0,
-            netWorkMinutes:       null,
+            netWorkMinutes: null,
+            lateLogin: false,
+            lateByMinutes: null,
+            earlyLogout: false,
+            earlyByMinutes: null,
+            violations: [],
+            hasViolations: false,
           });
 
         } else {
           fullCalendar.push({
-            _id:         `absent-${dateStr}`,
+            _id: `absent-${dateStr}`,
             employeeId,
-            date:        dateStr,
-            status:      "absent",
+            date: dateStr,
+            status: "absent",
             statusLabel: "No attendance marked for the day",
-            clockIn:     null,
-            clockOut:    null,
-            breaks:      [],
-            totalBreaks:          0,
-            workDurationMinutes:  null,
+            clockIn: null,
+            clockOut: null,
+            breaks: [],
+            totalBreaks: 0,
+            workDurationMinutes: null,
             breakDurationMinutes: 0,
-            netWorkMinutes:       null,
+            netWorkMinutes: null,
+            lateLogin: false,
+            lateByMinutes: null,
+            earlyLogout: false,
+            earlyByMinutes: null,
+            violations: [],
+            hasViolations: false,
           });
         }
 
@@ -852,27 +930,36 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       // Most recent first
       fullCalendar.sort((a, b) => (a.date > b.date ? -1 : 1));
 
-      // Summary counts for the period
+      // Summary counts — each counter is independent so a day with
+      // LATE_LOGIN + MISSED_LOGOUT increments both late AND missedLogout.
       const summary = {
-        present:  fullCalendar.filter(l => l.status === "present").length,
-        incomplete: fullCalendar.filter(l => l.status === "incomplete").length,
-        absent:   fullCalendar.filter(l => l.status === "absent").length,
-        holidays: fullCalendar.filter(l => l.status === "holiday").length,
-        totalWorkMinutes: fullCalendar.reduce((a, l) => a + (l.netWorkMinutes ?? 0), 0),
+        present: fullCalendar.filter((l) => l.status === "present").length,
+        incomplete: fullCalendar.filter((l) => l.status === "incomplete").length,
+        absent: fullCalendar.filter((l) => l.status === "absent").length,
+        holidays: fullCalendar.filter((l) => l.status === "holiday").length,
+        late: fullCalendar.filter((l) => l.lateLogin).length,
+        earlyLogout: fullCalendar.filter((l) => l.earlyLogout).length,
+        missedLogout: fullCalendar.filter((l) =>
+          l.violations?.some((v) => v.type === "MISSED_LOGOUT")
+        ).length,
+        totalWorkMinutes: fullCalendar.reduce(
+          (a, l) => a + (l.netWorkMinutes ?? 0),
+          0
+        ),
       };
 
       return res.status(200).json({
         success: true,
         employeeId,
-        data:    fullCalendar,
+        data: fullCalendar,
         summary,
       });
     }
 
-    // ── Paginated fallback for plain listing (no month/year filter) ───────────
-    const skip  = (parseInt(page) - 1) * parseInt(limit);
+    // ── Paginated fallback (no month/year filter) ─────────────────────────────
+    const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Attendance.countDocuments(filter);
-    const logs  = await Attendance.find(filter)
+    const logs = await Attendance.find(filter)
       .sort({ date: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -883,25 +970,34 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
         return acc + (calcDurationMinutes(b.start, b.end) || 0);
       }, 0);
 
+      const violations = computeViolations(log);
+
       return {
-        _id:              log._id,
-        date:             log.date,
-        clockIn:          log.clockIn  ?? null,
-        clockOut:         log.clockOut ?? null,
-        clockInLocation:  log.clockInLocation,
+        _id: log._id,
+        date: log.date,
+        clockIn: log.clockIn ?? null,
+        clockOut: log.clockOut ?? null,
+        clockInLocation: log.clockInLocation,
         clockOutLocation: log.clockOutLocation,
         breaks: log.breaks.map((b) => ({
-          start:         b.start,
-          end:           b.end ?? null,
+          start: b.start,
+          end: b.end ?? null,
           startLocation: b.startLocation,
-          endLocation:   b.endLocation,
-          duration:      calcDurationMinutes(b.start, b.end),
+          endLocation: b.endLocation,
+          duration: calcDurationMinutes(b.start, b.end),
         })),
-        totalBreaks:          log.breaks.length,
-        workDurationMinutes:  workMinutes,
+        totalBreaks: log.breaks.length,
+        workDurationMinutes: workMinutes,
         breakDurationMinutes: totalBreakMinutes,
-        netWorkMinutes:       workMinutes != null ? workMinutes - totalBreakMinutes : null,
+        netWorkMinutes:
+          workMinutes != null ? workMinutes - totalBreakMinutes : null,
         status: log.clockOut ? "present" : log.clockIn ? "incomplete" : "absent",
+        lateLogin: log.lateLogin ?? false,
+        lateByMinutes: log.lateByMinutes ?? null,
+        earlyLogout: log.earlyLogout ?? false,
+        earlyByMinutes: log.earlyByMinutes ?? null,
+        violations,
+        hasViolations: violations.length > 0,
       };
     });
 
@@ -910,12 +1006,12 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       employeeId,
       data: enrichedLogs,
       pagination: {
-        page:       parseInt(page),
-        limit:      parseInt(limit),
+        page: parseInt(page),
+        limit: parseInt(limit),
         total,
         totalPages: Math.ceil(total / parseInt(limit)),
-        hasPrev:    parseInt(page) > 1,
-        hasNext:    parseInt(page) < Math.ceil(total / parseInt(limit)),
+        hasPrev: parseInt(page) > 1,
+        hasNext: parseInt(page) < Math.ceil(total / parseInt(limit)),
       },
     });
 
