@@ -613,7 +613,7 @@ export const leaveEmailTemplate = (type, data) => {
                 <p><strong>Reason:</strong> ${data.reason}</p>
             `;
             actionText = 'Review Request';
-            actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leaves/${data.requestId}`;
+            actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
             break;
 
         case 'APPROVED_TO_EMPLOYEE':
@@ -626,7 +626,7 @@ export const leaveEmailTemplate = (type, data) => {
                 <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
             `;
             actionText = 'View Details';
-            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leaves/${data.requestId}`;
+            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
             break;
 
         case 'REJECTED_TO_EMPLOYEE':
@@ -640,7 +640,7 @@ export const leaveEmailTemplate = (type, data) => {
                 <p><strong>Reason:</strong> ${data.rejectedComments || 'Please contact HR'}</p>
             `;
             actionText = 'Apply Again';
-            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leaves/new`;
+            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
             break;
     }
 
