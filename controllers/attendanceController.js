@@ -551,6 +551,12 @@ export const getAllEmployeesAttendance = async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const targetDate = date || new Date().toISOString().split("T")[0];
 
+    // ── Fetch OfficeTiming dynamically ─────────────────────────────────
+    const timing = await OfficeTiming.findOne({ key: "default" });
+    const [startH, startM] = (timing?.startTime ?? "09:00").split(":").map(Number);
+    const grace = timing?.graceMinutes ?? 0;
+    const cutoffMinutes = startH * 60 + startM + grace;
+
     // Build employee search filter
     const employeeMatch = {};
     if (search) {
@@ -607,43 +613,66 @@ export const getAllEmployeesAttendance = async (req, res) => {
                   in: {
                     $let: {
                       vars: {
-                        period: { $toUpper: { $arrayElemAt: ["$$parts", 1] } }, // ← $toUpper added
+                        period: { $toUpper: { $arrayElemAt: ["$$parts", 1] } },
                         timeParts: { $split: [{ $arrayElemAt: ["$$parts", 0] }, ":"] },
                       },
                       in: {
                         $let: {
                           vars: {
-                            hour: { $toInt: { $arrayElemAt: ["$$timeParts", 0] } },
+                            rawHour: { $toInt: { $arrayElemAt: ["$$timeParts", 0] } },
                             minute: { $toInt: { $arrayElemAt: ["$$timeParts", 1] } },
                           },
                           in: {
-                            $cond: [
-                              { $ne: ["$$period", "AM"] },
-                              "Late",
-                              {
+                            $let: {
+                              vars: {
+                                // Correct 12-hour → 24-hour conversion
+                                hour: {
+                                  $switch: {
+                                    branches: [
+                                      // 12:xx AM → 0
+                                      {
+                                        case: { $and: [{ $eq: ["$$period", "AM"] }, { $eq: ["$$rawHour", 12] }] },
+                                        then: 0
+                                      },
+                                      // 12:xx PM → 12 (no change)
+                                      {
+                                        case: { $and: [{ $eq: ["$$period", "PM"] }, { $eq: ["$$rawHour", 12] }] },
+                                        then: 12
+                                      },
+                                      // 1–11 PM → add 12
+                                      {
+                                        case: { $eq: ["$$period", "PM"] },
+                                        then: { $add: ["$$rawHour", 12] }
+                                      },
+                                    ],
+                                    default: "$$rawHour"  // AM, not 12 → unchanged
+                                  }
+                                }
+                              },
+                              in: {
                                 $cond: [
                                   {
                                     $lte: [
                                       { $add: [{ $multiply: ["$$hour", 60] }, "$$minute"] },
-                                      575, // 9:35 → 9*60+35
-                                    ],
+                                      cutoffMinutes   // ← dynamic, e.g. 610
+                                    ]
                                   },
                                   "Present",
-                                  "Late",
-                                ],
-                              },
-                            ],
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
+                                  "Late"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               },
-              "Absent",
-            ],
-          },
-        },
+              "Absent"
+            ]
+          }
+        }
       }
     ];
 
