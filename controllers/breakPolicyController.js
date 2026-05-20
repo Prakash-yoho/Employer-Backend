@@ -1,15 +1,11 @@
-// controllers/breakPolicyController.js
 import BreakPolicy from "../model/BreakPolicy.js";
-import { hhmmToMinutes } from "./officeTimingController.js";
 
-// ─── Helper ───────────────────────────────────────────────────────────────────
 async function getPolicy() {
   let doc = await BreakPolicy.findOne({ key: "default" });
   if (!doc) doc = await BreakPolicy.create({ key: "default" });
   return doc;
 }
 
-// ─── GET /api/break-policy ────────────────────────────────────────────────────
 export const getBreakPolicy = async (req, res) => {
   try {
     const policy = await getPolicy();
@@ -19,8 +15,6 @@ export const getBreakPolicy = async (req, res) => {
   }
 };
 
-// ─── PUT /api/break-policy ────────────────────────────────────────────────────
-// Body: { slots: [{ type, label, allowedMinutes, startWindow, endWindow, isActive }] }
 export const updateBreakPolicy = async (req, res) => {
   try {
     const { slots } = req.body;
@@ -30,13 +24,12 @@ export const updateBreakPolicy = async (req, res) => {
       return res.status(400).json({ error: "slots array is required" });
     }
 
-    // Validate each slot
     for (const s of slots) {
       if (!["MORNING", "LUNCH", "EVENING"].includes(s.type)) {
         return res.status(400).json({ error: `Invalid break type: ${s.type}` });
       }
       if (typeof s.allowedMinutes !== "number" || s.allowedMinutes < 1) {
-        return res.status(400).json({ error: `allowedMinutes must be a positive number` });
+        return res.status(400).json({ error: "allowedMinutes must be a positive number" });
       }
     }
 
