@@ -53,12 +53,21 @@ const leaveSchema = new Schema({
             }
         ]
     },
-totalDays: {
-    type: Number,
-    required: true,
-    min: 0.5,
-    max: 365
-},    
+    totalDays: {
+        type: Number,
+        required: true,
+        min: 0.5,
+        max: 365
+    },
+    sandwichDays: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    sandwichDates: {
+        type: [String],
+        default: []
+    },
 
     clDays: {
         type: Number,
@@ -91,7 +100,7 @@ totalDays: {
         default: 'PENDING'
     },
     cancelledAt: Date,
-cancelledByEmployee: { type: Boolean, default: false },
+    cancelledByEmployee: { type: Boolean, default: false },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser', default: null },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser', default: null },
     approvedComments: { type: String, trim: true, maxlength: 500, default: null },
@@ -115,7 +124,8 @@ leaveSchema.pre('save', function () {
         const diffTime = Math.abs(new Date(this.endDate) - new Date(this.startDate));
         let diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
         if (this.leaveDuration !== 'FULL_DAY') diffDays = 0.5;
-        this.totalDays = diffDays;
+        // Add sandwich days on top of calendar diff
+        this.totalDays = diffDays + (this.sandwichDays || 0);
     }
 });
 
