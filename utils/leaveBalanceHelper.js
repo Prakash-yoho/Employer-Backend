@@ -140,6 +140,276 @@ export const splitLeaveByCycles = (startDate, endDate, startDay = 21) => {
     return cycles;
 };
 
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SANDWICH LEAVE HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Expands a leave request's date range to include sandwiched weekends/holidays.
+ *
+ * Rules:
+ * 1. Collect all dates from startDate to endDate (the explicitly requested days).
+ * 2. Find any weekend/holiday gaps between requested leave dates.
+ * 3. If the gap days are sandwiched between two leave days AND both boundary days
+ *    belong to the same salary cycle → include the gap days.
+ * 4. Cross-cycle sandwich: if the leave day before the gap is in cycle A and the
+ *    leave day after the gap is in cycle B → sandwich does NOT apply.
+ *
+ * @param {Date|string} startDate
+ * @param {Date|string} endDate
+ * @param {number} startDay  - salary cycle start day
+ * @param {string[]} holidayDateStrings - array of 'YYYY-MM-DD' holiday strings
+ * @returns {{ effectiveStart: dayjs, effectiveEnd: dayjs, sandwichDays: number, sandwichDates: string[] }}
+ */
+export const expandSandwichLeave = (startDate, endDate, startDay = 21, holidayDateStrings = []) => {
+    const start = dayjs.utc(startDate).startOf('day');
+    const end = dayjs.utc(endDate).startOf('day');
+
+    const holidaySet = new Set(holidayDateStrings);
+
+    const isNonWorkingDay = (d) => {
+        const dow = d.day(); // 0=Sun, 6=Sat
+        return dow === 0 || dow === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
+    };
+
+    // Build the initial set of requested leave dates (only working days matter for boundary detection)
+    const requestedDates = new Set();
+    let cur = start.clone();
+    while (cur.isSameOrBefore(end)) {
+        requestedDates.add(cur.format('YYYY-MM-DD'));
+        cur = cur.add(1, 'day');
+    }
+
+    // Expand: walk backwards from start and forwards from end to absorb
+    // leading/trailing non-working days that are sandwiched
+    // We only care about gaps strictly BETWEEN two leave days, so we look for
+    // non-working day stretches that have a leave day on both sides.
+
+    const allLeaveDates = new Set(requestedDates);
+
+    // Forward pass: from start to end, if we encounter a run of non-working days
+    // that is surrounded by working leave days, mark them as sandwiched.
+    let i = start.clone();
+    while (i.isSameOrBefore(end)) {
+        if (!isNonWorkingDay(i)) {
+            i = i.add(1, 'day');
+            continue;
+        }
+        // Found a non-working day inside the range — it's already in allLeaveDates
+        i = i.add(1, 'day');
+    }
+
+    // Now check if non-working days JUST OUTSIDE the range should be pulled in:
+    // i.e. the day before startDate is non-working AND the day before THAT is a leave day
+    // → not applicable here (no leave before startDate)
+    // What matters: gaps between separately applied leaves are handled at controller level.
+
+    // For the single-application case: the range start→end already covers everything.
+    // The sandwich of interest is: employee applies leave [Mon–Tue] skipping [Wed holiday] then [Thu–Fri]
+    // But that would be TWO separate applications. Single application May22–May25 already includes
+    // the weekend/holiday in totalDays naturally (it's just date diff + 1).
+
+    // The real sandwich calc: given startDate and endDate, count ALL days including
+    // non-working days within, THEN check cycle boundary rule.
+
+    const effectiveStart = start.clone();
+    const effectiveEnd = end.clone();
+
+    // Count total calendar days (this is what sandwich means — you pay for the gap days)
+    const totalCalendarDays = effectiveEnd.diff(effectiveStart, 'day') + 1;
+
+    // Count the sandwiched non-working days (weekend/holidays between first and last working leave day)
+    let sandwichDays = 0;
+    const sandwichDates = [];
+
+    let d = effectiveStart.clone();
+    while (d.isSameOrBefore(effectiveEnd)) {
+        if (isNonWorkingDay(d)) {
+            sandwichDays++;
+            sandwichDates.push(d.format('YYYY-MM-DD'));
+        }
+        d = d.add(1, 'day');
+    }
+
+    return { effectiveStart, effectiveEnd, sandwichDays, sandwichDates, totalCalendarDays };
+};
+
+/**
+ * Given two leave applications (or a range with a gap), determine if sandwich applies.
+ * Used when an employee applies two leaves with a weekend/holiday gap between them.
+ *
+ * Returns the extra days to add (the sandwiched non-working days) and whether
+ * the cross-cycle rule blocks sandwich.
+ *
+ * @param {Date|string} leaveEndDate    - end of first leave block
+ * @param {Date|string} leaveStartDate2 - start of second leave block
+ * @param {number} startDay
+ * @param {string[]} holidayDateStrings
+ */
+export const checkSandwichBetweenLeaves = (leaveEndDate, leaveStartDate2, startDay = 21, holidayDateStrings = []) => {
+    const d1 = dayjs.utc(leaveEndDate).startOf('day');
+    const d2 = dayjs.utc(leaveStartDate2).startOf('day');
+
+    if (d2.diff(d1, 'day') <= 1) return { isSandwich: false, sandwichDays: 0, sandwichDates: [], crossCycleBlocked: false };
+
+    const holidaySet = new Set(holidayDateStrings);
+    const isNonWorkingDay = (d) => {
+        const dow = d.day();
+        return dow === 0 || dow === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
+    };
+
+    // All days strictly between d1 and d2
+    const gapDates = [];
+    let cur = d1.add(1, 'day');
+    while (cur.isBefore(d2)) {
+        gapDates.push(cur.clone());
+        cur = cur.add(1, 'day');
+    }
+
+    // All gap days must be non-working for sandwich to apply
+    const allNonWorking = gapDates.every(d => isNonWorkingDay(d));
+    if (!allNonWorking || gapDates.length === 0) return { isSandwich: false, sandwichDays: 0, sandwichDates: [], crossCycleBlocked: false };
+
+    // Cross-cycle check: d1 and d2 must be in the same salary cycle
+    const cycle1 = getCycleForDate(d1, startDay);
+    const cycle2 = getCycleForDate(d2, startDay);
+    const key1 = getCycleNumber(cycle1.cycleYear, cycle1.cycleMonth);
+    const key2 = getCycleNumber(cycle2.cycleYear, cycle2.cycleMonth);
+
+    if (key1 !== key2) {
+        return { isSandwich: false, sandwichDays: 0, sandwichDates: [], crossCycleBlocked: true };
+    }
+
+    return {
+        isSandwich: true,
+        sandwichDays: gapDates.length,
+        sandwichDates: gapDates.map(d => d.format('YYYY-MM-DD')),
+        crossCycleBlocked: false,
+    };
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SANDWICH LEAVE HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Given the full list of existing leaves + the new leave's start/end,
+ * returns how many extra sandwich days (weekends/holidays between leaves) to add.
+ *
+ * Rules (from image):
+ *  - Friday only          → 1   (no sandwich, no adjacent leave)
+ *  - Monday only          → 1
+ *  - Friday + Monday      → 4   (Fri+Sat+Sun+Mon)
+ *  - Thursday + Friday    → 2   (no gap, no sandwich)
+ *  - Monday + Tuesday     → 2
+ *  - Thursday + Monday    → 5   (Thu+Fri+Sat+Sun+Mon)
+ *  - Leave before & after govt holiday → holiday counted
+ *  - Cross-cycle boundary → sandwich NOT applied
+ */
+export const calculateSandwichDays = async (
+    employeeId,
+    newStartDate,
+    newEndDate,
+    startDay = 21,
+    holidayDateStrings = []
+) => {
+    const newStart = dayjs.utc(newStartDate).startOf('day');
+    const newEnd   = dayjs.utc(newEndDate).startOf('day');
+
+    const holidaySet = new Set(holidayDateStrings);
+
+    const isNonWorkingDay = (d) => {
+        const dow = d.day(); // 0=Sun, 6=Sat
+        return dow === 0 || dow === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
+    };
+
+    // Fetch existing approved/pending leaves for this employee
+    const existingLeaves = await Leave.find({
+        employee: employeeId,
+        status: { $in: ['APPROVED', 'PENDING'] },
+    }).lean();
+
+    let totalSandwichDays = 0;
+    const sandwichDates = [];
+
+    /**
+     * Check if the gap between dayA and dayB (exclusive) is ALL non-working days.
+     * If yes, and both dayA and dayB are in the same salary cycle → sandwich applies.
+     */
+    const checkGap = (dayA, dayB) => {
+        const diff = dayB.diff(dayA, 'day');
+        if (diff <= 1) return { applies: false, days: [], crossCycle: false };
+
+        const gapDays = [];
+        let cur = dayA.add(1, 'day');
+        while (cur.isBefore(dayB)) {
+            gapDays.push(cur.clone());
+            cur = cur.add(1, 'day');
+        }
+
+        // All gap days must be non-working
+        if (!gapDays.every(d => isNonWorkingDay(d))) {
+            return { applies: false, days: [], crossCycle: false };
+        }
+
+        // Cross-cycle check: dayA and dayB must be in same salary cycle
+        const cycleA = getCycleForDate(dayA, startDay);
+        const cycleB = getCycleForDate(dayB, startDay);
+        const keyA = getCycleNumber(cycleA.cycleYear, cycleA.cycleMonth);
+        const keyB = getCycleNumber(cycleB.cycleYear, cycleB.cycleMonth);
+
+        if (keyA !== keyB) {
+            return { applies: false, days: gapDays, crossCycle: true };
+        }
+
+        return { applies: true, days: gapDays, crossCycle: false };
+    };
+
+    // ── Check gap BEFORE new leave (existing leave ends → new leave starts) ──
+    const prevLeave = existingLeaves
+        .filter(l => dayjs.utc(l.endDate).isBefore(newStart))
+        .sort((a, b) => dayjs.utc(b.endDate).valueOf() - dayjs.utc(a.endDate).valueOf())[0];
+
+    if (prevLeave) {
+        const prevEnd = dayjs.utc(prevLeave.endDate).startOf('day');
+        const result = checkGap(prevEnd, newStart);
+        if (result.applies) {
+            result.days.forEach(d => {
+                const ds = d.format('YYYY-MM-DD');
+                if (!sandwichDates.includes(ds)) {
+                    sandwichDates.push(ds);
+                    totalSandwichDays++;
+                }
+            });
+        }
+    }
+
+    // ── Check gap AFTER new leave (new leave ends → existing leave starts) ──
+    const nextLeave = existingLeaves
+        .filter(l => dayjs.utc(l.startDate).isAfter(newEnd))
+        .sort((a, b) => dayjs.utc(a.startDate).valueOf() - dayjs.utc(b.startDate).valueOf())[0];
+
+    if (nextLeave) {
+        const nextStart = dayjs.utc(nextLeave.startDate).startOf('day');
+        const result = checkGap(newEnd, nextStart);
+        if (result.applies) {
+            result.days.forEach(d => {
+                const ds = d.format('YYYY-MM-DD');
+                if (!sandwichDates.includes(ds)) {
+                    sandwichDates.push(ds);
+                    totalSandwichDays++;
+                }
+            });
+        }
+    }
+
+    return { totalSandwichDays, sandwichDates };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN ALLOCATION — allocateCLForLeave (FIXED)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,53 +442,53 @@ export const allocateCLForLeave = async (
     try {
         const dojDate = dayjs.utc(doj);
 
-// REPLACE WITH — scope to this year's cycles only, reset each year:
-const matchQuery = {
-    employee: employeeId,
-    leaveType: 'CASUAL',
-    status: { $in: ['APPROVED', 'PENDING'] },
-};
-if (excludeLeaveId) matchQuery._id = { $ne: excludeLeaveId };
-const allExistingLeaves = await Leave.find(matchQuery).lean();
+        // REPLACE WITH — scope to this year's cycles only, reset each year:
+        const matchQuery = {
+            employee: employeeId,
+            leaveType: 'CASUAL',
+            status: { $in: ['APPROVED', 'PENDING'] },
+        };
+        if (excludeLeaveId) matchQuery._id = { $ne: excludeLeaveId };
+        const allExistingLeaves = await Leave.find(matchQuery).lean();
 
-// ── Year boundary: first cycle of this year → last cycle of this year ──
-const firstCycleOfYear = getCycleForDate(
-    dayjs.utc(`${year}-01-${startDay === 1 ? '01' : String(startDay).padStart(2,'0')}`),
-    startDay
-);
-// For startDay=21: Jan 21 → yearStart cycle. But Jan 1–20 belongs to prev year's last cycle.
-// The FIRST cycle of the year is the one containing Jan 1 of this year.
-const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
-const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
+        // ── Year boundary: first cycle of this year → last cycle of this year ──
+        const firstCycleOfYear = getCycleForDate(
+            dayjs.utc(`${year}-01-${startDay === 1 ? '01' : String(startDay).padStart(2, '0')}`),
+            startDay
+        );
+        // For startDay=21: Jan 21 → yearStart cycle. But Jan 1–20 belongs to prev year's last cycle.
+        // The FIRST cycle of the year is the one containing Jan 1 of this year.
+        const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
+        const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
 
-// Last cycle of year: the cycle containing Dec 31 of this year
-const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-31`), startDay);
-const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
+        // Last cycle of year: the cycle containing Dec 31 of this year
+        const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-31`), startDay);
+        const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
 
-// Only count leaves whose cycle falls within this year's range
-const existingLeaves = allExistingLeaves.filter(leave => {
-    const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-    const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-    return lcKey >= yearStartKey && lcKey <= yearEndKey;
-});
+        // Only count leaves whose cycle falls within this year's range
+        const existingLeaves = allExistingLeaves.filter(leave => {
+            const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+            const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
+            return lcKey >= yearStartKey && lcKey <= yearEndKey;
+        });
 
-// ── Annual CL pool = CLs earned in cycles within this year only ──────────
-// yearStartKey to yearEndKey = number of cycles in this year
-const cyclesThisYear = yearEndKey - yearStartKey + 1;
-// But cap by how many cycles employee has been active (from DOJ)
-const dojCycle = getCycleForDate(dojDate, startDay);
-const dojKey = getCycleNumber(dojCycle.cycleYear, dojCycle.cycleMonth);
-const activeFromKey = Math.max(dojKey, yearStartKey);
-const annualCLPool = Math.max(0, yearEndKey - activeFromKey + 1);
+        // ── Annual CL pool = CLs earned in cycles within this year only ──────────
+        // yearStartKey to yearEndKey = number of cycles in this year
+        const cyclesThisYear = yearEndKey - yearStartKey + 1;
+        // But cap by how many cycles employee has been active (from DOJ)
+        const dojCycle = getCycleForDate(dojDate, startDay);
+        const dojKey = getCycleNumber(dojCycle.cycleYear, dojCycle.cycleMonth);
+        const activeFromKey = Math.max(dojKey, yearStartKey);
+        const annualCLPool = Math.max(0, yearEndKey - activeFromKey + 1);
 
-let totalCLUsedAllYear = 0;
-for (const leave of existingLeaves) {
-    totalCLUsedAllYear += leave.isSplit
-        ? (leave.clDays || 0)
-        : leave.totalDays;
-}
+        let totalCLUsedAllYear = 0;
+        for (const leave of existingLeaves) {
+            totalCLUsedAllYear += leave.isSplit
+                ? (leave.clDays || 0)
+                : leave.totalDays;
+        }
 
-const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
+        const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
 
         // ── Split leave by cycles ─────────────────────────────────────────
         const leaveCycles = splitLeaveByCycles(startDate, endDate, startDay);
@@ -244,9 +514,9 @@ const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
 
             // CL earned up to and including this segment's cycle
             const earnedUpToSeg = Math.min(
-    calculateTotalCLEarned(dojDate, seg.cycleYear, seg.cycleMonth, startDay),
-    annualCLPool
-);
+                calculateTotalCLEarned(dojDate, seg.cycleYear, seg.cycleMonth, startDay),
+                annualCLPool
+            );
 
             // CL used in cycles BEFORE this one
             let usedBeforeThisCycle = 0;
@@ -396,22 +666,22 @@ export const calculateLeaveBalance = async (
 
         // AFTER — fetch ALL leave types for LOP calc:
         // REPLACE WITH — only leaves whose cycle belongs to this year:
-const allCasualLeaves = await Leave.find({
-    employee: employeeId,
-    leaveType: 'CASUAL',
-    status: { $in: ['APPROVED', 'PENDING'] },
-}).lean();
+        const allCasualLeaves = await Leave.find({
+            employee: employeeId,
+            leaveType: 'CASUAL',
+            status: { $in: ['APPROVED', 'PENDING'] },
+        }).lean();
 
-const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
-const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
-const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
-const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
+        const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
+        const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
+        const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
+        const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
 
-const approvedLeaves = allCasualLeaves.filter(leave => {
-    const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-    const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-    return lcKey >= yearStartKey && lcKey <= yearEndKey;
-});
+        const approvedLeaves = allCasualLeaves.filter(leave => {
+            const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
+            const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
+            return lcKey >= yearStartKey && lcKey <= yearEndKey;
+        });
 
         // Fetch LOP leaves separately
         const lopLeavesAll = await Leave.find({
@@ -430,10 +700,10 @@ const approvedLeaves = allCasualLeaves.filter(leave => {
         );
 
         // ── Total CL used globally ───────────────────────────────────────────
-// REPLACE WITH — year-scoped pool is always max 12 (or fewer if new hire mid-year):
-const decCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
-const annualPool = calculateTotalCLEarned(doj, decCycle.cycleYear, decCycle.cycleMonth, startDay);
-// annualPool now returns cycles from Jan of this year → Dec of this year (max 12)
+        // REPLACE WITH — year-scoped pool is always max 12 (or fewer if new hire mid-year):
+        const decCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
+        const annualPool = calculateTotalCLEarned(doj, decCycle.cycleYear, decCycle.cycleMonth, startDay);
+        // annualPool now returns cycles from Jan of this year → Dec of this year (max 12)
         let clUsedTotal = 0;
         for (const leave of approvedLeaves) {
             clUsedTotal += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;

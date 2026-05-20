@@ -12,6 +12,8 @@ import {
     getCycleForDate,
     getAvailableCL,
     allocateCLForLeave,
+    checkSandwichBetweenLeaves,
+    calculateSandwichDays,
 } from '../utils/leaveBalanceHelper.js';
 import {
     createLeaveValidation,
@@ -157,15 +159,44 @@ export const createLeaveRequest = async (req, res) => {
         }
 
         // ── Dates & requested days ─────────────────────────────────────────
+        // ── Dates & requested days ─────────────────────────────────────────
         const startDateObj = parseUTCDate(validatedData.startDate);
         const endDateObj = validatedData.leaveDuration !== 'FULL_DAY'
             ? parseUTCDate(validatedData.startDate)
             : parseUTCDate(validatedData.endDate);
 
+        // ── Sandwich check ─────────────────────────────────────────────────
+        // Check if this leave sandwiches with any existing approved/pending leave
+        // (a prior leave ends just before a weekend/holiday that leads into this leave's start,
+        //  OR this leave ends just before a weekend/holiday that leads into a future leave's start)
+        // ── Sandwich check ─────────────────────────────────────────────────
+        let sandwichExtraDays = 0;
+        let sandwichDatesResult = [];
+
+        if (validatedData.leaveDuration === 'FULL_DAY') {
+            const sandwichPolicy = await LeavePolicy.findOne({ isActive: true }).lean();
+            const sDay = sandwichPolicy?.salaryCycle?.startDay ?? 21;
+
+            const sandwichHolidays = await Holiday.find({
+                year: { $in: [dayjs.utc(startDateObj).year(), dayjs.utc(endDateObj).year()] }
+            }).lean();
+            const holidayStrings = sandwichHolidays.map(h => dayjs.utc(h.date).format('YYYY-MM-DD'));
+
+            const { totalSandwichDays, sandwichDates } = await calculateSandwichDays(
+                user._id,
+                startDateObj,
+                endDateObj,
+                sDay,
+                holidayStrings
+            );
+
+            sandwichExtraDays = totalSandwichDays;
+            sandwichDatesResult = sandwichDates;
+        }
+
         const requestedDays = validatedData.leaveDuration !== 'FULL_DAY'
             ? 0.5
-            : Math.floor((endDateObj - startDateObj) / (1000 * 3600 * 24)) + 1;
-
+            : Math.floor((endDateObj - startDateObj) / (1000 * 3600 * 24)) + 1 + sandwichExtraDays;
         // ─────────────────────────────────────────────────────────────────────
         // LEAVE TYPE LOGIC
         // ─────────────────────────────────────────────────────────────────────
@@ -202,18 +233,24 @@ export const createLeaveRequest = async (req, res) => {
             lopDays = allocation.lopDays;
             isSplit = allocation.isSplit;
 
+            const sandwichNote = sandwichExtraDays > 0
+                ? ` Sandwich policy applied: ${sandwichExtraDays} weekend/holiday day(s) (${sandwichDatesResult.map(d => dayjs.utc(d).format('DD MMM')).join(', ')}) counted as leave.`
+                : '';
+
             if (lopDays > 0 && clDays === 0) {
                 finalLeaveType = 'LOP';
-                successMessage = `No CL quota remaining for this period. ${requestedDays} day(s) applied as Loss of Pay (LOP).`;
+                successMessage = `No CL quota remaining for this period. ${requestedDays} day(s) applied as Loss of Pay (LOP).${sandwichNote}`;
                 isSplit = false;
                 splitNote = null;
             } else if (clDays > 0 && lopDays > 0) {
                 finalLeaveType = 'CASUAL';
                 splitNote = allocation.splitNote;
-                successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).`;
+                successMessage = `Leave applied: ${clDays} day(s) as Casual Leave + ${lopDays} day(s) as Loss of Pay (LOP).${sandwichNote}`;
             } else {
                 finalLeaveType = 'CASUAL';
-                successMessage = `Leave applied successfully as Casual Leave.`;
+                successMessage = sandwichExtraDays > 0
+                    ? `Leave applied (${requestedDays}d total).${sandwichNote}`
+                    : `Leave applied successfully as Casual Leave.`;
             }
         } else if (validatedData.leaveType === 'PATERNITY') {
             const policy = await LeavePolicy.findOne({ isActive: true }).lean();
@@ -345,6 +382,8 @@ export const createLeaveRequest = async (req, res) => {
             lopDays,
             isSplit,
             splitNote,
+            sandwichDays: sandwichExtraDays,
+            sandwichDates: sandwichDatesResult,
             employee: user._id,
             employeeId: employee.employeeId,
             employeeName: `${employee.firstName} ${employee.lastName}`,
@@ -420,7 +459,9 @@ export const createLeaveRequest = async (req, res) => {
                 appliedAt: leaveRequest.appliedAt,
                 reason: leaveRequest.reason,
                 isLOP: finalLeaveType === 'LOP',
-                isPartialLOP: isSplit
+                isPartialLOP: isSplit,
+                sandwichDays: sandwichExtraDays,
+                sandwichDates: sandwichDatesResult,
             }
         });
 
@@ -478,6 +519,8 @@ export const getMyLeaveRequests = async (req, res) => {
             lopDays: leave.lopDays ?? 0,
             isSplit: leave.isSplit ?? false,
             splitNote: leave.splitNote ?? null,
+            sandwichDays: leave.sandwichDays ?? 0,
+            sandwichDates: leave.sandwichDates ?? [],
             reason: leave.reason,
             status: formatStatus(leave.status),
             appliedAt: leave.appliedAt,
@@ -681,7 +724,7 @@ export const cancelLeaveRequest = async (req, res) => {
         await leaveRequest.save();
 
         // leaveRequest.wasApproved = wasApproved;
-        
+
         sendMail({
             to: process.env.LEAVECREATEMAILID,
             subject: wasApproved
