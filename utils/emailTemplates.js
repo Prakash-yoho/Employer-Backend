@@ -2,18 +2,18 @@
 export const newAdminUserTemplate = (adminUser, plainPassword, role) => {
   const roleDisplay =
     role === 'EMPLOYER_HR' ? 'HR' :
-    role === 'EMPLOYER_IT' ? 'IT Support' :
-    'Administrator';
+      role === 'EMPLOYER_IT' ? 'IT Support' :
+        'Administrator';
 
   const portalName =
     role === 'EMPLOYER_HR' ? 'HR Portal' :
-    role === 'EMPLOYER_IT' ? 'IT Support Portal' :
-    'Admin Portal';
+      role === 'EMPLOYER_IT' ? 'IT Support Portal' :
+        'Admin Portal';
 
   const portalUrl =
     role === 'EMPLOYER_HR' ? process.env.FRONTEND_EMPLOYER_HR :
-    role === 'EMPLOYER_IT' ? process.env.FRONTEND_EMPLOYER_IT :
-    process.env.FRONTEND_EMPLOYER_ADMIN || process.env.FRONTEND_EMPLOYER_HR;
+      role === 'EMPLOYER_IT' ? process.env.FRONTEND_EMPLOYER_IT :
+        process.env.FRONTEND_EMPLOYER_ADMIN || process.env.FRONTEND_EMPLOYER_HR;
 
   const companyName = process.env.COMPANY_NAME || 'Company Name';
 
@@ -462,7 +462,7 @@ export const appointmentLetterEmailTemplate = (employee) => {
  * Matches the same dark-teal + orange brand style as appointmentLetterEmailTemplate
  */
 export const relievingLetterEmailTemplate = (employee) => {
-    return `
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -517,7 +517,7 @@ export const relievingLetterEmailTemplate = (employee) => {
  * Same dark-teal + orange brand style
  */
 export const experienceCertificateEmailTemplate = (employee) => {
-    return `
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -597,54 +597,77 @@ const formatDate = (date) => {
 
 
 export const leaveEmailTemplate = (type, data) => {
-    let subject, title, message, details, actionText, actionUrl;
+  let subject, title, message, details, actionText, actionUrl;
 
-    console.log(type,data,"Email Template")
+  console.log(type, data, "Email Template")
 
-    switch (type) {
-        case 'REQUEST_TO_HR':
-            subject = `New Leave Request - ${data.employeeName}`;
-            title = 'New Leave Request';
-            message = `${data.employeeName} has submitted a leave request`;
-            details = `
+  switch (type) {
+    case 'REQUEST_TO_HR':
+      subject = `New Leave Request - ${data.employeeName}`;
+      title = 'New Leave Request';
+      message = `${data.employeeName} has submitted a leave request`;
+      details = `
                 <p><strong>Employee:</strong> ${data.employeeName}</p>
                 <p><strong>Leave Type:</strong> ${data.leaveType}</p>
                 <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
                 <p><strong>Reason:</strong> ${data.reason}</p>
             `;
-            actionText = 'Review Request';
-            actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
-            break;
+      actionText = 'Review Request';
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
+      break;
 
-        case 'APPROVED_TO_EMPLOYEE':
-            subject = `Leave Request Approved - ${data.requestId}`;
-            title = 'Leave Approved ✅';
-            message = 'Your leave request has been approved';
-            details = `
+    case 'APPROVED_TO_EMPLOYEE':
+      subject = `Leave Request Approved - ${data.requestId}`;
+      title = 'Leave Approved ✅';
+      message = 'Your leave request has been approved';
+      details = `
                 <p><strong>Request ID:</strong> ${data.requestId}</p>
                 <p><strong>Leave Type:</strong> ${data.leaveType}</p>
                 <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
             `;
-            actionText = 'View Details';
-            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
-            break;
+      actionText = 'View Details';
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
+      break;
 
-        case 'REJECTED_TO_EMPLOYEE':
-            subject = `Leave Request Update - ${data.requestId}`;
-            title = 'Leave Not Approved';
-            message = 'Your leave request requires attention';
-            details = `
+    case 'REJECTED_TO_EMPLOYEE':
+      subject = `Leave Request Update - ${data.requestId}`;
+      title = 'Leave Not Approved';
+      message = 'Your leave request requires attention';
+      details = `
                 <p><strong>Request ID:</strong> ${data.requestId}</p>
                 <p><strong>Leave Type:</strong> ${data.leaveType}</p>
                 <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
                 <p><strong>Reason:</strong> ${data.rejectedComments || 'Please contact HR'}</p>
             `;
-            actionText = 'Apply Again';
-            actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
-            break;
-    }
+      actionText = 'Apply Again';
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
+      break;
 
-    return `
+    case 'CANCELLED_TO_HR':
+      subject = `Leave Cancelled - ${data.employeeName}`;
+      title = data.wasApproved ? '⚠ Approved Leave Cancelled' : 'Leave Request Cancelled';
+      message = data.wasApproved
+        ? `${data.employeeName} has cancelled a previously approved leave`
+        : `${data.employeeName} has cancelled their leave request`;
+      details = `
+        <p><strong>Employee:</strong> ${data.employeeName}</p>
+        <p><strong>Request ID:</strong> ${data.requestId}</p>
+        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
+        <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
+        <p><strong>Total Days:</strong> ${data.totalDays}</p>
+        ${data.wasApproved ? '<p style="color:#ef4444;"><strong>⚠ This leave was already approved.</strong></p>' : ''}
+    `;
+      actionText = 'View Leave Management';
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
+      break;
+  }
+
+  const color = type === 'APPROVED_TO_EMPLOYEE' ? '#10b981'
+    : type === 'REJECTED_TO_EMPLOYEE' ? '#ef4444'
+      : type === 'CANCELLED_TO_HR' ? '#ef4444'
+        : '#f59e0b'; // REQUEST_TO_HR and fallback
+
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -669,8 +692,7 @@ export const leaveEmailTemplate = (type, data) => {
     }
     
     .header {
-      background: ${type === 'REQUEST_TO_HR' ? '#f59e0b' :
-            type === 'APPROVED_TO_EMPLOYEE' ? '#10b981' : '#ef4444'};
+      background: ${color};
       color: white;
       padding: 20px;
       text-align: center;
@@ -691,14 +713,12 @@ export const leaveEmailTemplate = (type, data) => {
       padding: 20px;
       border-radius: 6px;
       margin: 15px 0;
-      border-left: 4px solid ${type === 'REQUEST_TO_HR' ? '#f59e0b' :
-            type === 'APPROVED_TO_EMPLOYEE' ? '#10b981' : '#ef4444'};
+      background: ${color};
     }
     
     .btn {
       display: inline-block;
-      background: ${type === 'REQUEST_TO_HR' ? '#f59e0b' :
-            type === 'APPROVED_TO_EMPLOYEE' ? '#10b981' : '#ef4444'};
+      background: ${color};
       color: white;
       padding: 12px 25px;
       text-decoration: none;

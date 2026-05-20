@@ -680,6 +680,16 @@ export const cancelLeaveRequest = async (req, res) => {
         leaveRequest.cancelledByEmployee = true;
         await leaveRequest.save();
 
+        // leaveRequest.wasApproved = wasApproved;
+        
+        sendMail({
+            to: process.env.LEAVECREATEMAILID,
+            subject: wasApproved
+                ? `⚠ Approved Leave Cancelled - ${leaveRequest.employeeName} (${leaveRequest.requestId})`
+                : `Leave Request Cancelled - ${leaveRequest.employeeName} (${leaveRequest.requestId})`,
+            html: leaveEmailTemplate('CANCELLED_TO_HR', leaveRequest)
+        }).catch(err => console.error('Email error:', err));
+
         const hrAdmins = await EmployerUser.find({
             role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] },
             isActive: true

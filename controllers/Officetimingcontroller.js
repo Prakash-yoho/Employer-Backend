@@ -63,10 +63,10 @@ export const updateOfficeTiming = async (req, res) => {
     const updatedBy = req.user?.employeeId ?? null;
 
     const update = {};
-    if (startTime    !== undefined) update.startTime    = startTime;
-    if (endTime      !== undefined) update.endTime      = endTime;
+    if (startTime !== undefined) update.startTime = startTime;
+    if (endTime !== undefined) update.endTime = endTime;
     if (graceMinutes !== undefined) update.graceMinutes = Number(graceMinutes);
-    if (updatedBy)                  update.updatedBy    = updatedBy;
+    if (updatedBy) update.updatedBy = updatedBy;
 
     const timing = await OfficeTiming.findOneAndUpdate(
       { key: "default" },
@@ -93,8 +93,8 @@ export const getViolationsReport = async (req, res) => {
   try {
     const { month, year, date } = req.query;
 
-    const timing      = await getTiming();
-    const cutoffMins  = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
+    const timing = await getTiming();
+    const cutoffMins = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
     const endTimeMins = hhmmToMinutes(timing.endTime);
 
     // Today's date string – used to exclude still-active sessions
@@ -102,9 +102,9 @@ export const getViolationsReport = async (req, res) => {
 
     // ── Build date filter ─────────────────────────────────────────────────────
     const filter = {};
-    if (date)       filter.date = date;
+    if (date) filter.date = date;
     else if (month) filter.date = { $regex: `^${month}` };
-    else if (year)  filter.date = { $regex: `^${year}` };
+    else if (year) filter.date = { $regex: `^${year}` };
     else {
       const d = new Date();
       const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -128,7 +128,7 @@ export const getViolationsReport = async (req, res) => {
 
     for (const log of logs) {
       // timeStrToMinutes now returns whole minutes (seconds dropped)
-      const clockInMins  = timeStrToMinutes(log.clockIn);
+      const clockInMins = timeStrToMinutes(log.clockIn);
       const clockOutMins = timeStrToMinutes(log.clockOut);
 
       // ── Violation flags ───────────────────────────────────────────────────
@@ -143,25 +143,42 @@ export const getViolationsReport = async (req, res) => {
       // Missed clock-out: had a clock-in, never clocked out, day is over
       //   Today's records are skipped — employee may still be working.
       const isMissedClockOut =
-        log.clockIn  != null &&
-        !log.clockOut        &&
+        log.clockIn != null &&
+        !log.clockOut &&
         log.date < todayStr;  // strictly past dates only
 
-      // Skip records with no violations at all
-      if (!isLate && !isEarlyLogout && !isMissedClockOut) continue;
+
+      // ── Break-duration violations ─────────────────────────────────────────────
+      const breakViolations = (log.breaks ?? [])
+        .filter((b) => b.isBreakViolation && b.overByMinutes > 0)
+        .map((b) => ({
+          breakType: b.breakType,
+          takenMinutes: (b.allowedMinutes ?? 0) + b.overByMinutes,
+          allowedMinutes: b.allowedMinutes,
+          overByMinutes: b.overByMinutes,
+        }));
+
+      const hasBreakViolation = breakViolations.length > 0;
+
+      // Merge into the existing violation check gate
+      if (!isLate && !isEarlyLogout && !isMissedClockOut && !hasBreakViolation) continue;
+
 
       const emp = await getEmp(log.employeeId);
 
       violations.push({
-        _id:        log._id,
+        _id: log._id,
         employeeId: log.employeeId,
-        name:       emp ? `${emp.firstName} ${emp.lastName}` : log.employeeId,
+        name: emp ? `${emp.firstName} ${emp.lastName}` : log.employeeId,
         designation: emp?.designation ?? "",
-        department:  emp?.department  ?? "",
-        avatar:      emp?.avatar      ?? null,
-        date:        log.date,
-        clockIn:     log.clockIn  ?? null,
-        clockOut:    log.clockOut ?? null,
+        department: emp?.department ?? "",
+        avatar: emp?.avatar ?? null,
+        date: log.date,
+        clockIn: log.clockIn ?? null,
+        clockOut: log.clockOut ?? null,
+
+        breakViolations,
+        hasBreakViolation,
 
         // Late login
         isLate,
@@ -191,8 +208,8 @@ export const getViolationsReport = async (req, res) => {
       success: true,
       count: violations.length,
       officeTiming: {
-        startTime:    timing.startTime,
-        endTime:      timing.endTime,
+        startTime: timing.startTime,
+        endTime: timing.endTime,
         graceMinutes: timing.graceMinutes,
       },
       data: violations,

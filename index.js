@@ -27,6 +27,7 @@ import { clearExpiredAssignments } from './utils/clearExpiredAssignments.js'
 import { sendScheduleExpiryReminders } from './utils/Sendscheduleexpiryreminders.js'
 import defaultDocsRoutes from './routes/defaultDocsRoutes.js'
 import attendanceRoutes from './routes/attendanceRoutes.js'
+import breakPolicyRoutes from "./routes/breakPolicyRoutes.js"
 
 import announcementRoutes from './routes/announcementRoutes.js'
 dotenv.config()
@@ -83,6 +84,7 @@ app.use('/api/leaves', leaveRoutes)
 app.use('/api/office-timing', OfficeTimingRoutes)
 app.use("/api/admin/attendance", attendanceRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/break-policy", breakPolicyRoutes);
 app.use('/api/employer/dashboard', dashboardHRAdminRoutes);
 app.use('/api/it-dashboard', itDashboardRoutes);
 app.use('/api/employee/dashboard', employeeDashboardRoutes);

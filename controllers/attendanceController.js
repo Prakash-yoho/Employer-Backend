@@ -6,10 +6,12 @@ import { v4 as uuidv4 } from "uuid";
 import Employee from '../model/Employee.js';
 import Holiday from "../model/Holiday.js";
 import OfficeTiming from "../model/OfficeTiming.js";
+import BreakPolicy from "../model/BreakPolicy.js";
 import { hhmmToMinutes, timeStrToMinutes } from "./officeTimingController.js";
 import dayjs from "dayjs";
 
 const bucketName = process.env.AWS_S3_BUCKET;
+const awsregion = process.env.AWS_REGION;
 
 // ─── Helpers ───
 
@@ -29,8 +31,7 @@ async function uploadImage(base64Image, folder = "attendance") {
       ContentType: "image/jpeg",
     })
   );
-  const REGION = "ap-south-2";
-  return `https://${bucketName}.s3.${REGION}.amazonaws.com/${fileName}`;
+  return `https://${bucketName}.s3.${awsregion}.amazonaws.com/${fileName}`;
 }
 
 // Parse location safely
@@ -121,39 +122,69 @@ export const clockIn = async (req, res) => {
   }
 };
 
+
+// ─── Helper: get break policy ─────────────────────────────────────────────────
+async function getBreakPolicy() {
+  let doc = await BreakPolicy.findOne({ key: "default" });
+  if (!doc) doc = await BreakPolicy.create({ key: "default" });
+  return doc;
+}
+
 // Start Break
 export const startBreak = async (req, res) => {
-  const { employeeId, image, location } = req.body;
+  const { employeeId, image, location, breakType = "OTHER" } = req.body;
   const { date, time } = getNow();
 
   try {
     const attendance = await Attendance.findOne({ employeeId, date });
-
-    if (!attendance) {
+    if (!attendance)
       return res.status(404).json({ error: "No clock-in found for today" });
-    }
 
     const lastBreak = attendance.breaks.at(-1);
-    if (lastBreak && !lastBreak.end) {
+    if (lastBreak && !lastBreak.end)
       return res.status(409).json({ error: "Break already in progress" });
+
+    // ── Validate breakType against policy ──────────────────────────────────
+    const policy = await getBreakPolicy();
+    const slot = policy.slots.find((s) => s.type === breakType && s.isActive);
+
+    // Check if this breakType was already used today
+    if (breakType !== "OTHER") {
+      const alreadyUsed = attendance.breaks.some(
+        (b) => b.breakType === breakType && b.end // completed break of same type
+      );
+      if (alreadyUsed) {
+        return res.status(409).json({
+          error: `${breakType.charAt(0) + breakType.slice(1).toLowerCase()} break already taken today`,
+        });
+      }
     }
 
-    const startImage = await uploadImage(image, "break-start");
+    const startImage    = await uploadImage(image, "break-start");
     const startLocation = parseLocation(location);
 
     attendance.breaks.push({
-      start: time,
-      end: null,
+      start:          time,
+      end:            null,
       startImage,
       startLocation,
+      breakType,
+      allowedMinutes: slot?.allowedMinutes ?? null,
+      overByMinutes:  null,
+      isBreakViolation: false,
     });
 
     await attendance.save();
 
-    res.json(attendance);
+    return res.json({
+      ...attendance.toObject(),
+      _breakPolicy: slot
+        ? { type: slot.type, label: slot.label, allowedMinutes: slot.allowedMinutes }
+        : null,
+    });
   } catch (err) {
     console.error("Start Break Error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 };
 
@@ -164,31 +195,46 @@ export const endBreak = async (req, res) => {
 
   try {
     const attendance = await Attendance.findOne({ employeeId, date });
-
-    if (!attendance) {
+    if (!attendance)
       return res.status(404).json({ error: "No clock-in found for today" });
-    }
 
     const lastBreak = attendance.breaks.at(-1);
-
-    if (!lastBreak || lastBreak.end) {
+    if (!lastBreak || lastBreak.end)
       return res.status(404).json({ error: "No active break to end" });
-    }
 
-    const endImage = await uploadImage(image, "break-end");
+    const endImage    = await uploadImage(image, "break-end");
     const endLocation = parseLocation(location);
 
-    lastBreak.end = time;
-    lastBreak.endImage = endImage;
-    lastBreak.endLocation = endLocation;
+    // ── Compute duration & violation ─────────────────────────────────────────
+    const durationMins = calcDurationMinutes(lastBreak.start, time);
+    const allowed      = lastBreak.allowedMinutes;
+    const overByMinutes =
+      allowed != null && durationMins != null && durationMins > allowed
+        ? Math.round(durationMins - allowed)
+        : null;
+
+    lastBreak.end              = time;
+    lastBreak.endImage         = endImage;
+    lastBreak.endLocation      = endLocation;
+    lastBreak.overByMinutes    = overByMinutes;
+    lastBreak.isBreakViolation = overByMinutes != null && overByMinutes > 0;
 
     attendance.markModified("breaks");
     await attendance.save();
 
-    res.json(attendance);
+    return res.json({
+      ...attendance.toObject(),
+      _breakFeedback: {
+        breakType:    lastBreak.breakType,
+        durationMins,
+        allowedMinutes: allowed,
+        overByMinutes,
+        isViolation:  lastBreak.isBreakViolation,
+      },
+    });
   } catch (err) {
     console.error("End Break Error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 };
 
@@ -1126,26 +1172,26 @@ export const getAttendanceSummary = async (req, res) => {
 
     const [todayLogs, totalEmployees] = await Promise.all([
       Attendance.find({ date: targetDate }),
-      Employee.countDocuments({ isActive: true }),  // ← add this
+      Employee.countDocuments({ isActive: true }),
     ]);
 
     const present = todayLogs.filter((l) => l.clockIn).length;
     const completed = todayLogs.filter((l) => l.clockIn && l.clockOut).length;
     const active = todayLogs.filter((l) => l.clockIn && !l.clockOut).length;
-    const onBreak = todayLogs.filter((l) =>
-      l.breaks?.some((b) => b.start && !b.end)
-    ).length;
+    const onBreak = todayLogs.filter((l) => l.breaks?.some((b) => b.start && !b.end)).length;
+    const late = todayLogs.filter((l) => l.lateLogin === true).length; 
 
     return res.status(200).json({
       success: true,
       date: targetDate,
       summary: {
-        total: totalEmployees,          // ← total active employees, not just logs
+        total: totalEmployees,
         present,
         completed,
         active,
         onBreak,
-        absent: totalEmployees - present,  // ← real absent count
+        late,
+        absent: totalEmployees - present,
       },
     });
   } catch (err) {
