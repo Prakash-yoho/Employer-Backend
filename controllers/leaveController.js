@@ -518,10 +518,9 @@ export const getMyLeaveRequests = async (req, res) => {
             clDays: leave.clDays ?? 0,
             lopDays: leave.lopDays ?? 0,
             isSplit: leave.isSplit ?? false,
-            splitNote: leave.splitNote ?? null,
             sandwichDays: leave.sandwichDays ?? 0,
             sandwichDates: leave.sandwichDates ?? [],
-            reason: leave.reason,
+            reason: leave.reason, reason: leave.reason,
             status: formatStatus(leave.status),
             appliedAt: leave.appliedAt,
             approvedComments: leave.approvedComments,
@@ -848,6 +847,8 @@ export const getAllLeaveRequests = async (req, res) => {
             lopDays: leave.lopDays ?? 0,
             isSplit: leave.isSplit ?? false,
             splitNote: leave.splitNote ?? null,
+            sandwichDays: leave.sandwichDays ?? 0,
+            sandwichDates: leave.sandwichDates ?? [],
             reason: leave.reason,
             status: formatStatus(leave.status),
             isLOP: leave.leaveType === 'LOP',
@@ -880,7 +881,6 @@ export const getAllLeaveRequests = async (req, res) => {
                 leave.status === 'APPROVED' ? leave.approvedComments :
                     leave.status === 'REJECTED' ? leave.rejectedComments : null
         }));
-
         const totalPages = Math.ceil(total / limit);
         return res.json({
             success: true,
