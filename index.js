@@ -18,6 +18,9 @@ import itDashboardRoutes from './routes/itDashboardRoutes.js'
 import notificationRoutes from './routes/notificationRoutes.js'
 import employeeDashboardRoutes from './routes/employeeDashboardRoutes.js'
 import leaveRoutes from './routes/leaveRoutes.js'
+import leavePolicyRoutes from './routes/leavepolicyRoutes.js'
+import holidayRoutes from './routes/holidayRoutes.js'
+import permissionRoutes from './routes/permissionRoutes.js'
 import OfficeTimingRoutes from './routes/Officetimingroutes.js'
 import PhaseScheduleRoutes from './routes/PhaseScheduleRoutes.js'
 import projectRoutes from './routes/projectmanagementRoute.js'
@@ -59,16 +62,6 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Job portal Routes
-// app.use("/api/jobs", jobRoutes);
-// app.use("/api/users", userRoutes);
-// app.use("/api/otp", otpRoutes);
-// app.use("/api/applications", applicationRoutes);
-// app.use("/api/dashboard", dashboardRoutes)
-// app.use("/api/admin", adminRoutes);
-// app.use("/api/resume", resumeRoutes);
-
-
 
 app.use("/public", express.static("public"));
 app.use("/api", defaultDocsRoutes);
@@ -81,6 +74,9 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/leaves', leaveRoutes)
+app.use('/api/leavepolicy', leavePolicyRoutes)
+app.use('/api/holidays', holidayRoutes)
+app.use('/api/permissions', permissionRoutes)
 app.use('/api/office-timing', OfficeTimingRoutes)
 app.use("/api/admin/attendance", attendanceRoutes);
 app.use("/api/attendance", attendanceRoutes);

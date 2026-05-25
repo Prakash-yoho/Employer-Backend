@@ -1,615 +1,481 @@
+/**
+ * leaveBalanceHelper.js
+ *
+ * ═══════════════════════════════════════════════════════════════
+ * LEAVE CONCEPT — READ THIS BEFORE TOUCHING ANYTHING
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * CL ACCRUAL:
+ *   • 1 CL per calendar month = 12 CL per year.
+ *   • DOJ in January  → earns Jan–Dec = 12 CL.
+ *   • DOJ in February → earns Feb–Dec = 11 CL. (month of DOJ counts as full 1 CL)
+ *   • No proration within a month.
+ *   • Year resets on Jan 1. Unused CL does NOT carry across years.
+ *
+ * CARRY FORWARD (within the year):
+ *   • Unused CL from Jan carries to Feb, unused Feb+Jan carries to Mar, etc.
+ *   • Available CL right now = months_earned_so_far − total_CL_used_so_far.
+ *   • Example: DOJ=Jan, today=June, no leaves taken → available = 6.
+ *
+ * FIFO — ORDER OF APPLICATION (not leave date):
+ *   • CL buckets are drained in application-date order (appliedAt ASC).
+ *   • Employee applies Leave-A (June 10) first  → gets January's CL bucket.
+ *   • Employee applies Leave-B (June  3) second → gets February's CL bucket.
+ *   • Leave-B's date (June 3) < Leave-A's date (June 10) but that does NOT matter.
+ *     What matters is which leave was APPLIED FIRST.
+ *
+ * ONCE SAVED = FIXED:
+ *   • A saved leave's clDays/lopDays/clBucketUsed is the permanent record.
+ *   • No recalculation or reordering of already-saved leaves.
+ *   • New allocation only runs on fresh leave creation.
+ *
+ * NO FUTURE BORROWING:
+ *   • A leave in month M can only use CL from buckets ≤ M.
+ *   • Cannot use December CL for a January leave.
+ *
+ * SANDWICH RULE:
+ *   • Non-working days (weekend/holiday) between two adjacent leaves
+ *     IN THE SAME CALENDAR MONTH are counted as leave days.
+ *   • Cross-month sandwich is NOT allowed.
+ *
+ * LOP:
+ *   • If no CL bucket available → the day becomes Loss of Pay.
+ *   • isSplit = true when a single leave has both CL days and LOP days.
+ *
+ * ═══════════════════════════════════════════════════════════════
+ */
 
 import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-import isSameOrAfter from 'dayjs/plugin/isSameOrAfter.js';
+import utc          from 'dayjs/plugin/utc.js';
+import isSameOrAfter  from 'dayjs/plugin/isSameOrAfter.js';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
 
 dayjs.extend(utc);
 dayjs.extend(isSameOrAfter);
 dayjs.extend(isSameOrBefore);
 
-import Leave from '../model/Leave.js';
-import Employee from '../model/Employee.js';
+import Leave      from '../model/Leave.js';
+import Employee   from '../model/Employee.js';
 import LeavePolicy from '../model/LeavePolicy.js';
-import Permission from '../model/Permission.js';
+import Permission  from '../model/Permission.js';
+import Holiday     from '../model/Holiday.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CORE CYCLE HELPERS
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Unique integer key for a calendar month. Jan 2025 → 24300. Comparable. */
+const mKey = (year, month /* 0-indexed */) => year * 12 + month;
+
+/** month key from a dayjs date */
+const mKeyOf = (d) => mKey(dayjs.utc(d).year(), dayjs.utc(d).month());
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. BUILD CL BUCKETS
+//    12 buckets per year. Each bucket = 1 CL if employee was already joined.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Get which cycle period a date belongs to.
+ * buildCLBuckets(doj, year)
  *
- * With startDay = 21:
- *   Jan 21 – Feb 20  → cycleMonth = 1  (February),  cycleYear = YYYY
- *   Feb 21 – Mar 20  → cycleMonth = 2  (March),     cycleYear = YYYY
- *   Dec 21 – Jan 20  → cycleMonth = 0  (January),   cycleYear = YYYY+1
- *
- * "cycleMonth" = calendar month of the cycle END date (0-indexed).
+ * Returns 12 bucket objects, one per calendar month.
+ * bucket.earned = 1 if the employee had joined by that month, else 0.
+ * bucket.used   = 0 initially; mutated by replayLeavesOnBuckets.
+ * bucket.remaining = earned - used.
  */
-export const getCycleForDate = (date, startDay = 21) => {
-    const d = dayjs.utc(date);
-    const dayOfMonth = d.date();
+export const buildCLBuckets = (dojDate, year) => {
+    const doj      = dayjs.utc(dojDate);
+    const dojYear  = doj.year();
+    const dojMonth = doj.month(); // 0-indexed
 
-    let cycleEndMonth, cycleEndYear;
-    let cycleStartDate, cycleEndDate;
+    return Array.from({ length: 12 }, (_, m) => {
+        // earned = 1 only if employee joined on or before this month
+        let earned = 0;
+        if      (dojYear <  year)                      earned = 1;
+        else if (dojYear === year && m >= dojMonth)    earned = 1;
+        // dojYear > year → earned = 0 (joined in the future)
 
-    if (startDay === 1) {
-        cycleEndMonth = d.month();
-        cycleEndYear = d.year();
-        cycleStartDate = d.startOf('month');
-        cycleEndDate = d.endOf('month');
-    } else if (dayOfMonth >= startDay) {
-        // On/after startDay → belongs to NEXT calendar month's named cycle
-        const nextMonth = d.add(1, 'month');
-        cycleEndMonth = nextMonth.month();
-        cycleEndYear = nextMonth.year();
-        cycleStartDate = d.date(startDay);
-        cycleEndDate = nextMonth.date(startDay - 1);
+        const monthStart = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-01`);
+        return {
+            key:        mKey(year, m),
+            year,
+            month:      m,           // 0-indexed
+            monthName:  monthStart.format('MMMM'),
+            monthShort: monthStart.format('MMM'),
+            label:      monthStart.format('MMMM YYYY'),  // "January 2025"
+            earned,
+            used:       0,
+            remaining:  earned,
+        };
+    });
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. BUILD DAY LIST FOR A LEAVE
+//    Returns individual days with weights (1 = full day, 0.5 = half day).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const buildDayList = (leave) => {
+    const start = dayjs.utc(leave.startDate).startOf('day');
+    const end   = dayjs.utc(leave.endDate).startOf('day');
+    const days  = [];
+
+    if (leave.leaveDuration === 'FIRST_HALF' || leave.leaveDuration === 'SECOND_HALF') {
+        // Half-day: single entry with weight 0.5
+        days.push({ date: start.format('YYYY-MM-DD'), weight: 0.5, isSandwich: false });
     } else {
-        // Before startDay → belongs to THIS calendar month's named cycle
-        cycleEndMonth = d.month();
-        cycleEndYear = d.year();
-        cycleStartDate = d.subtract(1, 'month').date(startDay);
-        cycleEndDate = d.date(startDay - 1);
-    }
-
-    return {
-        cycleMonth: cycleEndMonth,   // 0-indexed
-        cycleYear: cycleEndYear,
-        cycleLabel: `${cycleStartDate.format('DD MMM')} – ${cycleEndDate.format('DD MMM YYYY')}`,
-        start: cycleStartDate,
-        end: cycleEndDate,
-    };
-};
-
-/** Unique integer key for ordering cycles. */
-export const getCycleNumber = (cycleYear, cycleMonth) =>
-    cycleYear * 12 + cycleMonth;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CL ACCRUAL — CARRY-FORWARD MODEL
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Total CLs earned from DOJ cycle up to (and including) targetCycle.
- * 1 CL per cycle month, starting from the cycle that contains the DOJ.
- *
- * Example — DOJ = 15 Jan 2026, startDay = 21:
- *   DOJ cycle = Jan 2026 (Dec 21 – Jan 20 contains Jan 15 ✓)
- *   Jan cycle = +1, Feb cycle = +2, … May cycle = +5
- */
-// REPLACE WITH — year-scoped: max 12 per year, resets each year:
-export const calculateTotalCLEarned = (dojDate, targetCycleYear, targetCycleMonth, startDay = 21) => {
-    const doj = dayjs.utc(dojDate);
-    const dojCycle = getCycleForDate(doj, startDay);
-    const dojKey = getCycleNumber(dojCycle.cycleYear, dojCycle.cycleMonth);
-    const targetKey = getCycleNumber(targetCycleYear, targetCycleMonth);
-
-    if (targetKey < dojKey) return 0;
-
-    // ── Year boundary: first cycle of the target year ────────────────────
-    // The "leave year" starts from the cycle containing Jan 1 of targetCycleYear
-    const yearStart = getCycleForDate(dayjs.utc(`${targetCycleYear}-01-01`), startDay);
-    const yearStartKey = getCycleNumber(yearStart.cycleYear, yearStart.cycleMonth);
-
-    // Earned from the later of: DOJ cycle OR year-start cycle
-    const effectiveStartKey = Math.max(dojKey, yearStartKey);
-
-    if (targetKey < effectiveStartKey) return 0;
-    return targetKey - effectiveStartKey + 1;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LEAVE SPLITTING FOR CROSS-CYCLE LEAVES
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Split a date range into groups, one per salary cycle.
- * e.g. May 17–21 with startDay=21:
- *   May 17–20 → April cycle (May 20 end)
- *   May 21    → May   cycle (Jun 20 end)
- */
-export const splitLeaveByCycles = (startDate, endDate, startDay = 21) => {
-    const start = dayjs.utc(startDate).startOf('day');
-    const end = dayjs.utc(endDate).startOf('day');
-    const cycles = [];
-
-    let current = start.clone();
-    while (current.isSameOrBefore(end)) {
-        const cycle = getCycleForDate(current, startDay);
-        const key = getCycleNumber(cycle.cycleYear, cycle.cycleMonth);
-
-        let bucket = cycles.find(c => c.cycleKey === key);
-        if (!bucket) {
-            bucket = {
-                cycleKey: key,
-                cycleYear: cycle.cycleYear,
-                cycleMonth: cycle.cycleMonth,
-                cycleLabel: cycle.cycleLabel,
-                dates: [],
-                dayCount: 0,
-            };
-            cycles.push(bucket);
+        // Full day range
+        let cur = start.clone();
+        while (cur.isSameOrBefore(end)) {
+            days.push({ date: cur.format('YYYY-MM-DD'), weight: 1, isSandwich: false });
+            cur = cur.add(1, 'day');
         }
-        bucket.dates.push(current.clone());
-        bucket.dayCount++;
-        current = current.add(1, 'day');
-    }
-
-    return cycles;
-};
-
-
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SANDWICH LEAVE HELPER
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Expands a leave request's date range to include sandwiched weekends/holidays.
- *
- * Rules:
- * 1. Collect all dates from startDate to endDate (the explicitly requested days).
- * 2. Find any weekend/holiday gaps between requested leave dates.
- * 3. If the gap days are sandwiched between two leave days AND both boundary days
- *    belong to the same salary cycle → include the gap days.
- * 4. Cross-cycle sandwich: if the leave day before the gap is in cycle A and the
- *    leave day after the gap is in cycle B → sandwich does NOT apply.
- *
- * @param {Date|string} startDate
- * @param {Date|string} endDate
- * @param {number} startDay  - salary cycle start day
- * @param {string[]} holidayDateStrings - array of 'YYYY-MM-DD' holiday strings
- * @returns {{ effectiveStart: dayjs, effectiveEnd: dayjs, sandwichDays: number, sandwichDates: string[] }}
- */
-export const expandSandwichLeave = (startDate, endDate, startDay = 21, holidayDateStrings = []) => {
-    const start = dayjs.utc(startDate).startOf('day');
-    const end = dayjs.utc(endDate).startOf('day');
-
-    const holidaySet = new Set(holidayDateStrings);
-
-    const isNonWorkingDay = (d) => {
-        const dow = d.day(); // 0=Sun, 6=Sat
-        return dow === 0 || dow === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
-    };
-
-    // Build the initial set of requested leave dates (only working days matter for boundary detection)
-    const requestedDates = new Set();
-    let cur = start.clone();
-    while (cur.isSameOrBefore(end)) {
-        requestedDates.add(cur.format('YYYY-MM-DD'));
-        cur = cur.add(1, 'day');
-    }
-
-    // Expand: walk backwards from start and forwards from end to absorb
-    // leading/trailing non-working days that are sandwiched
-    // We only care about gaps strictly BETWEEN two leave days, so we look for
-    // non-working day stretches that have a leave day on both sides.
-
-    const allLeaveDates = new Set(requestedDates);
-
-    // Forward pass: from start to end, if we encounter a run of non-working days
-    // that is surrounded by working leave days, mark them as sandwiched.
-    let i = start.clone();
-    while (i.isSameOrBefore(end)) {
-        if (!isNonWorkingDay(i)) {
-            i = i.add(1, 'day');
-            continue;
+        // Append sandwich days (already stored on the leave record)
+        for (const sd of (leave.sandwichDates ?? [])) {
+            const sdStr = dayjs.utc(sd).format('YYYY-MM-DD');
+            if (!days.find(d => d.date === sdStr)) {
+                days.push({ date: sdStr, weight: 1, isSandwich: true });
+            }
         }
-        // Found a non-working day inside the range — it's already in allLeaveDates
-        i = i.add(1, 'day');
+        // Sort all days ascending
+        days.sort((a, b) => a.date.localeCompare(b.date));
     }
-
-    // Now check if non-working days JUST OUTSIDE the range should be pulled in:
-    // i.e. the day before startDate is non-working AND the day before THAT is a leave day
-    // → not applicable here (no leave before startDate)
-    // What matters: gaps between separately applied leaves are handled at controller level.
-
-    // For the single-application case: the range start→end already covers everything.
-    // The sandwich of interest is: employee applies leave [Mon–Tue] skipping [Wed holiday] then [Thu–Fri]
-    // But that would be TWO separate applications. Single application May22–May25 already includes
-    // the weekend/holiday in totalDays naturally (it's just date diff + 1).
-
-    // The real sandwich calc: given startDate and endDate, count ALL days including
-    // non-working days within, THEN check cycle boundary rule.
-
-    const effectiveStart = start.clone();
-    const effectiveEnd = end.clone();
-
-    // Count total calendar days (this is what sandwich means — you pay for the gap days)
-    const totalCalendarDays = effectiveEnd.diff(effectiveStart, 'day') + 1;
-
-    // Count the sandwiched non-working days (weekend/holidays between first and last working leave day)
-    let sandwichDays = 0;
-    const sandwichDates = [];
-
-    let d = effectiveStart.clone();
-    while (d.isSameOrBefore(effectiveEnd)) {
-        if (isNonWorkingDay(d)) {
-            sandwichDays++;
-            sandwichDates.push(d.format('YYYY-MM-DD'));
-        }
-        d = d.add(1, 'day');
-    }
-
-    return { effectiveStart, effectiveEnd, sandwichDays, sandwichDates, totalCalendarDays };
+    return days;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. FIFO REPLAY ENGINE
+//
+//    KEY RULE: sort by appliedAt (application date), NOT by leave start date.
+//
+//    Why: if employee applies Leave-A (June 10) first, it gets Jan CL.
+//         Then applies Leave-B (June 3) — even though June 3 < June 10,
+//         Leave-B is second in application order, so it gets Feb CL.
+//         The saved allocation is FIXED — never recalculated.
+//
+//    The "no future borrowing" guard: for each day, only buckets with
+//    key ≤ that day's month key are eligible. This prevents using
+//    December's CL for a January leave.
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Given two leave applications (or a range with a gap), determine if sandwich applies.
- * Used when an employee applies two leaves with a weekend/holiday gap between them.
+ * replayLeavesOnBuckets(buckets, leaves)
  *
- * Returns the extra days to add (the sandwiched non-working days) and whether
- * the cross-cycle rule blocks sandwich.
+ * Mutates each bucket's .used and .remaining.
+ * Returns allocationRecords[] — one entry per leave day showing which bucket
+ * was used (or whether it was LOP).
  *
- * @param {Date|string} leaveEndDate    - end of first leave block
- * @param {Date|string} leaveStartDate2 - start of second leave block
- * @param {number} startDay
- * @param {string[]} holidayDateStrings
+ * IMPORTANT: leaves are sorted by appliedAt ASC (application order).
  */
-export const checkSandwichBetweenLeaves = (leaveEndDate, leaveStartDate2, startDay = 21, holidayDateStrings = []) => {
-    const d1 = dayjs.utc(leaveEndDate).startOf('day');
-    const d2 = dayjs.utc(leaveStartDate2).startOf('day');
+export const replayLeavesOnBuckets = (buckets, leaves) => {
+    // ★ SORT BY appliedAt — this is the core of the FIFO contract
+    const ordered = [...leaves].sort((a, b) => {
+        const tA = a.appliedAt ? new Date(a.appliedAt).getTime() : 0;
+        const tB = b.appliedAt ? new Date(b.appliedAt).getTime() : 0;
+        return tA - tB;
+    });
 
-    if (d2.diff(d1, 'day') <= 1) return { isSandwich: false, sandwichDays: 0, sandwichDates: [], crossCycleBlocked: false };
+    const allocationRecords = [];
 
-    const holidaySet = new Set(holidayDateStrings);
-    const isNonWorkingDay = (d) => {
-        const dow = d.day();
-        return dow === 0 || dow === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
-    };
+    for (const leave of ordered) {
+        const days = buildDayList(leave);
 
-    // All days strictly between d1 and d2
-    const gapDates = [];
-    let cur = d1.add(1, 'day');
-    while (cur.isBefore(d2)) {
-        gapDates.push(cur.clone());
-        cur = cur.add(1, 'day');
+        for (const day of days) {
+            const dayMKey = mKeyOf(day.date);
+
+            // Find oldest available bucket that is ≤ this day's month
+            // (cannot borrow from future months)
+            const bucket = buckets
+                .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
+                .sort((a, b) => a.key - b.key)[0]; // oldest first
+
+            if (bucket) {
+                const consume    = Math.min(bucket.remaining, day.weight);
+                bucket.used      = +(bucket.used      + consume).toFixed(2);
+                bucket.remaining = +(bucket.remaining - consume).toFixed(2);
+
+                allocationRecords.push({
+                    leaveId:       leave._id?.toString(),
+                    requestId:     leave.requestId,
+                    appliedAt:     leave.appliedAt,
+                    leaveDate:     day.date,
+                    weight:        day.weight,
+                    isSandwich:    day.isSandwich,
+                    isLOP:         false,
+                    clBucketKey:   bucket.key,
+                    clBucketMonth: bucket.monthName,   // "January"
+                    clBucketLabel: bucket.label,       // "January 2025"
+                    consume,
+                });
+
+                // Partial draw — remaining weight becomes LOP
+                const lopPart = +(day.weight - consume).toFixed(2);
+                if (lopPart > 0) {
+                    allocationRecords.push({
+                        leaveId:       leave._id?.toString(),
+                        requestId:     leave.requestId,
+                        appliedAt:     leave.appliedAt,
+                        leaveDate:     day.date,
+                        weight:        lopPart,
+                        isSandwich:    day.isSandwich,
+                        isLOP:         true,
+                        clBucketKey:   null,
+                        clBucketMonth: null,
+                        clBucketLabel: null,
+                        consume:       lopPart,
+                    });
+                }
+            } else {
+                // No CL available → full LOP for this day
+                allocationRecords.push({
+                    leaveId:       leave._id?.toString(),
+                    requestId:     leave.requestId,
+                    appliedAt:     leave.appliedAt,
+                    leaveDate:     day.date,
+                    weight:        day.weight,
+                    isSandwich:    day.isSandwich,
+                    isLOP:         true,
+                    clBucketKey:   null,
+                    clBucketMonth: null,
+                    clBucketLabel: null,
+                    consume:       day.weight,
+                });
+            }
+        }
     }
 
-    // All gap days must be non-working for sandwich to apply
-    const allNonWorking = gapDates.every(d => isNonWorkingDay(d));
-    if (!allNonWorking || gapDates.length === 0) return { isSandwich: false, sandwichDays: 0, sandwichDates: [], crossCycleBlocked: false };
-
-    // Cross-cycle check: d1 and d2 must be in the same salary cycle
-    const cycle1 = getCycleForDate(d1, startDay);
-    const cycle2 = getCycleForDate(d2, startDay);
-    const key1 = getCycleNumber(cycle1.cycleYear, cycle1.cycleMonth);
-    const key2 = getCycleNumber(cycle2.cycleYear, cycle2.cycleMonth);
-
-    if (key1 !== key2) {
-        return { isSandwich: false, sandwichDays: 0, sandwichDates: [], crossCycleBlocked: true };
-    }
-
-    return {
-        isSandwich: true,
-        sandwichDays: gapDates.length,
-        sandwichDates: gapDates.map(d => d.format('YYYY-MM-DD')),
-        crossCycleBlocked: false,
-    };
+    return allocationRecords;
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// SANDWICH LEAVE HELPER
+// 4. ALLOCATE CL FOR A NEW LEAVE
+//    Called at leave creation time. Runs FIFO over existing saved leaves
+//    (in their applied order) to find what's still available, then allocates
+//    for the new leave.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Given the full list of existing leaves + the new leave's start/end,
- * returns how many extra sandwich days (weekends/holidays between leaves) to add.
+ * allocateCLForLeave({ employeeId, doj, startDate, endDate, leaveDuration,
+ *                      sandwichDays, sandwichDates, excludeLeaveId })
  *
- * Rules (from image):
- *  - Friday only          → 1   (no sandwich, no adjacent leave)
- *  - Monday only          → 1
- *  - Friday + Monday      → 4   (Fri+Sat+Sun+Mon)
- *  - Thursday + Friday    → 2   (no gap, no sandwich)
- *  - Monday + Tuesday     → 2
- *  - Thursday + Monday    → 5   (Thu+Fri+Sat+Sun+Mon)
- *  - Leave before & after govt holiday → holiday counted
- *  - Cross-cycle boundary → sandwich NOT applied
+ * Returns { clDays, lopDays, isSplit, isFullLOP, clBucketSummary }
+ *
+ * clBucketSummary: which buckets were consumed and how much.
+ *   e.g. [{ bucket: "January 2025", days: 1 }, { bucket: "February 2025", days: 2 }]
+ */
+export const allocateCLForLeave = async ({
+    employeeId,
+    doj,
+    startDate,
+    endDate,
+    leaveDuration,
+    sandwichDays  = 0,
+    sandwichDates = [],
+    excludeLeaveId = null,
+}) => {
+    try {
+        const startD = dayjs.utc(startDate).startOf('day');
+        const endD   = dayjs.utc(endDate).startOf('day');
+        const year   = startD.year();
+
+        // Build fresh buckets for the year
+        const buckets = buildCLBuckets(doj, year);
+
+        // If leave spans into next year, add next year's buckets too
+        const endYear     = endD.year();
+        const nextBuckets = endYear > year ? buildCLBuckets(doj, endYear) : [];
+        const allBuckets  = [...buckets, ...nextBuckets];
+
+        // Fetch all existing CASUAL leaves this year (APPROVED + PENDING)
+        // Exclude the leave being edited (if any)
+        const filter = {
+            employee:  employeeId,
+            leaveType: { $in: ['CASUAL', 'LOP'] },
+            status:    { $in: ['APPROVED', 'PENDING'] },
+            startDate: {
+                $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                $lte: dayjs.utc(`${endYear}-12-31`).endOf('day').toDate(),
+            },
+        };
+        if (excludeLeaveId) filter._id = { $ne: excludeLeaveId };
+
+        const existingLeaves = await Leave.find(filter).lean();
+
+        // Replay existing leaves to drain buckets (in appliedAt order)
+        replayLeavesOnBuckets(allBuckets, existingLeaves);
+
+        // Now build the new leave's day list and run through remaining buckets
+        const newLeaveObj = { startDate, endDate, leaveDuration, sandwichDates };
+        const days        = buildDayList(newLeaveObj);
+
+        let clDays  = 0;
+        let lopDays = 0;
+        const bucketConsumption = {}; // key → { label, days }
+
+        for (const day of days) {
+            const dayMKey = mKeyOf(day.date);
+
+            const bucket = allBuckets
+                .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
+                .sort((a, b) => a.key - b.key)[0];
+
+            if (bucket) {
+                const consume    = Math.min(bucket.remaining, day.weight);
+                bucket.used      = +(bucket.used      + consume).toFixed(2);
+                bucket.remaining = +(bucket.remaining - consume).toFixed(2);
+                clDays          += consume;
+
+                // Track which buckets were used
+                if (!bucketConsumption[bucket.key]) {
+                    bucketConsumption[bucket.key] = { key: bucket.key, label: bucket.label, monthName: bucket.monthName, days: 0 };
+                }
+                bucketConsumption[bucket.key].days = +(bucketConsumption[bucket.key].days + consume).toFixed(2);
+
+                const lopPart = +(day.weight - consume).toFixed(2);
+                if (lopPart > 0) lopDays += lopPart;
+            } else {
+                lopDays += day.weight;
+            }
+        }
+
+        clDays  = +clDays.toFixed(2);
+        lopDays = +lopDays.toFixed(2);
+
+        return {
+            clDays,
+            lopDays,
+            isSplit:   clDays > 0 && lopDays > 0,
+            isFullLOP: clDays === 0 && lopDays > 0,
+            clBucketSummary: Object.values(bucketConsumption).sort((a, b) => a.key - b.key),
+        };
+
+    } catch (err) {
+        console.error('allocateCLForLeave error:', err);
+        // Safe fallback
+        const totalDays = leaveDuration !== 'FULL_DAY' ? 0.5 :
+            Math.max(1, dayjs.utc(endDate).startOf('day').diff(dayjs.utc(startDate).startOf('day'), 'day') + 1 + sandwichDays);
+        return { clDays: 0, lopDays: totalDays, isSplit: false, isFullLOP: true, clBucketSummary: [] };
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. SANDWICH DETECTION
+//    Non-working days between two adjacent leaves IN THE SAME CALENDAR MONTH
+//    are counted as leave days.
+//    Cross-month sandwich is NOT allowed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * calculateSandwichDays(employeeId, newStartDate, newEndDate, holidayDateStrings)
+ *
+ * Returns { totalSandwichDays, sandwichDates: ['YYYY-MM-DD', ...] }
  */
 export const calculateSandwichDays = async (
     employeeId,
     newStartDate,
     newEndDate,
-    startDay = 21,
     holidayDateStrings = []
 ) => {
-    const newStart = dayjs.utc(newStartDate).startOf('day');
-    const newEnd   = dayjs.utc(newEndDate).startOf('day');
-
+    const newStart   = dayjs.utc(newStartDate).startOf('day');
+    const newEnd     = dayjs.utc(newEndDate).startOf('day');
     const holidaySet = new Set(holidayDateStrings);
+    const isNonWorking = (d) => d.day() === 0 || d.day() === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
 
-    const isNonWorkingDay = (d) => {
-        const dow = d.day(); // 0=Sun, 6=Sat
-        return dow === 0 || dow === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
-    };
-
-    // Fetch existing approved/pending leaves for this employee
     const existingLeaves = await Leave.find({
         employee: employeeId,
-        status: { $in: ['APPROVED', 'PENDING'] },
+        status:   { $in: ['APPROVED', 'PENDING'] },
     }).lean();
 
-    let totalSandwichDays = 0;
-    const sandwichDates = [];
-
-    /**
-     * Check if the gap between dayA and dayB (exclusive) is ALL non-working days.
-     * If yes, and both dayA and dayB are in the same salary cycle → sandwich applies.
-     */
+    // checkGap: returns sandwich dates in the gap between dayA and dayB
+    // Rules:
+    //   1. Gap must be entirely non-working days
+    //   2. dayA and dayB must be in the SAME calendar month
     const checkGap = (dayA, dayB) => {
+        // Must be same calendar month
+        if (dayA.month() !== dayB.month() || dayA.year() !== dayB.year()) return [];
         const diff = dayB.diff(dayA, 'day');
-        if (diff <= 1) return { applies: false, days: [], crossCycle: false };
+        if (diff <= 1) return []; // no gap to sandwich
 
-        const gapDays = [];
+        const gap = [];
         let cur = dayA.add(1, 'day');
-        while (cur.isBefore(dayB)) {
-            gapDays.push(cur.clone());
-            cur = cur.add(1, 'day');
-        }
+        while (cur.isBefore(dayB)) { gap.push(cur.clone()); cur = cur.add(1, 'day'); }
 
         // All gap days must be non-working
-        if (!gapDays.every(d => isNonWorkingDay(d))) {
-            return { applies: false, days: [], crossCycle: false };
-        }
-
-        // Cross-cycle check: dayA and dayB must be in same salary cycle
-        const cycleA = getCycleForDate(dayA, startDay);
-        const cycleB = getCycleForDate(dayB, startDay);
-        const keyA = getCycleNumber(cycleA.cycleYear, cycleA.cycleMonth);
-        const keyB = getCycleNumber(cycleB.cycleYear, cycleB.cycleMonth);
-
-        if (keyA !== keyB) {
-            return { applies: false, days: gapDays, crossCycle: true };
-        }
-
-        return { applies: true, days: gapDays, crossCycle: false };
+        if (!gap.every(d => isNonWorking(d))) return [];
+        return gap.map(d => d.format('YYYY-MM-DD'));
     };
 
-    // ── Check gap BEFORE new leave (existing leave ends → new leave starts) ──
+    // Nearest existing leave BEFORE new leave
     const prevLeave = existingLeaves
-        .filter(l => dayjs.utc(l.endDate).isBefore(newStart))
+        .filter(l => dayjs.utc(l.endDate).startOf('day').isBefore(newStart))
         .sort((a, b) => dayjs.utc(b.endDate).valueOf() - dayjs.utc(a.endDate).valueOf())[0];
 
-    if (prevLeave) {
-        const prevEnd = dayjs.utc(prevLeave.endDate).startOf('day');
-        const result = checkGap(prevEnd, newStart);
-        if (result.applies) {
-            result.days.forEach(d => {
-                const ds = d.format('YYYY-MM-DD');
-                if (!sandwichDates.includes(ds)) {
-                    sandwichDates.push(ds);
-                    totalSandwichDays++;
-                }
-            });
-        }
-    }
-
-    // ── Check gap AFTER new leave (new leave ends → existing leave starts) ──
+    // Nearest existing leave AFTER new leave
     const nextLeave = existingLeaves
-        .filter(l => dayjs.utc(l.startDate).isAfter(newEnd))
+        .filter(l => dayjs.utc(l.startDate).startOf('day').isAfter(newEnd))
         .sort((a, b) => dayjs.utc(a.startDate).valueOf() - dayjs.utc(b.startDate).valueOf())[0];
 
+    const sandwichDates = [];
+
+    if (prevLeave) {
+        const dates = checkGap(dayjs.utc(prevLeave.endDate).startOf('day'), newStart);
+        dates.forEach(d => { if (!sandwichDates.includes(d)) sandwichDates.push(d); });
+    }
     if (nextLeave) {
-        const nextStart = dayjs.utc(nextLeave.startDate).startOf('day');
-        const result = checkGap(newEnd, nextStart);
-        if (result.applies) {
-            result.days.forEach(d => {
-                const ds = d.format('YYYY-MM-DD');
-                if (!sandwichDates.includes(ds)) {
-                    sandwichDates.push(ds);
-                    totalSandwichDays++;
-                }
-            });
-        }
+        const dates = checkGap(newEnd, dayjs.utc(nextLeave.startDate).startOf('day'));
+        dates.forEach(d => { if (!sandwichDates.includes(d)) sandwichDates.push(d); });
     }
 
-    return { totalSandwichDays, sandwichDates };
+    return { totalSandwichDays: sandwichDates.length, sandwichDates };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN ALLOCATION — allocateCLForLeave (FIXED)
+// 6. GET AVAILABLE CL (quick check — for form display / validation)
+//    available = earned_months_so_far − total_cl_used_so_far
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * FIXED LOGIC:
- * ─────────────
- * For a cross-cycle leave (e.g. May 17–21 spanning Apr & May cycles):
- *   • We split the leave by cycle.
- *   • For EACH cycle segment, we compute:
- *       earned_up_to_this_cycle  –  already_used_before_this_cycle
- *       = available CL for that segment
- *   • This means the May 21 day uses the May cycle's CL correctly.
+ * getAvailableCL(employeeId, doj, refDate)
  *
- * Net result: May 17–21 with 5 total CL earned → all 5 days as CL, 0 LOP.
- *
- * @param {ObjectId} employeeId
- * @param {Date|string} doj
- * @param {Date|string} startDate
- * @param {Date|string} endDate
- * @param {number} requestedDays
- * @param {number} startDay
- * @param {number} year
- * @param {ObjectId|null} excludeLeaveId
+ * Returns { earned, used, available }
+ * refDate: the date to check "as of" (defaults to today).
  */
-export const allocateCLForLeave = async (
-    employeeId, doj, startDate, endDate, requestedDays, startDay, year,
-    excludeLeaveId = null
-) => {
-    try {
-        const dojDate = dayjs.utc(doj);
+export const getAvailableCL = async (employeeId, doj, refDate, salaryCycleStartDay = 21) => {
+    const ref      = dayjs.utc(refDate ?? new Date());
+    const year     = ref.year();
+    const dojD     = dayjs.utc(doj);
+    const dojYear  = dojD.year();
+    const dojMonth = dojD.month(); // 0-indexed
 
-        // REPLACE WITH — scope to this year's cycles only, reset each year:
-        const matchQuery = {
-            employee: employeeId,
-            leaveType: 'CASUAL',
-            status: { $in: ['APPROVED', 'PENDING'] },
-        };
-        if (excludeLeaveId) matchQuery._id = { $ne: excludeLeaveId };
-        const allExistingLeaves = await Leave.find(matchQuery).lean();
+    // Use cycle-end month, not raw calendar month.
+    // e.g. today=May 24, startDay=21 → we are in May21-Jun20 cycle → cycleMonth = June (5)
+    const refDay   = ref.date();
+    const refMonth = refDay >= salaryCycleStartDay
+        ? ref.add(1, 'month').month()   // cycle ends next calendar month
+        : ref.month();                  // cycle ends this calendar month
 
-        // ── Year boundary: first cycle of this year → last cycle of this year ──
-        const firstCycleOfYear = getCycleForDate(
-            dayjs.utc(`${year}-01-${startDay === 1 ? '01' : String(startDay).padStart(2, '0')}`),
-            startDay
-        );
-        // For startDay=21: Jan 21 → yearStart cycle. But Jan 1–20 belongs to prev year's last cycle.
-        // The FIRST cycle of the year is the one containing Jan 1 of this year.
-        const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
-        const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
+    // How many months earned as of cycle month (inclusive)
+    let earned = 0;
+    if      (dojYear < year)  earned = refMonth + 1;
+    else if (dojYear === year && dojMonth <= refMonth) earned = refMonth - dojMonth + 1;
 
-        // Last cycle of year: the cycle containing Dec 31 of this year
-        const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-31`), startDay);
-        const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
-
-        // Only count leaves whose cycle falls within this year's range
-        const existingLeaves = allExistingLeaves.filter(leave => {
-            const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-            const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-            return lcKey >= yearStartKey && lcKey <= yearEndKey;
-        });
-
-        // ── Annual CL pool = CLs earned in cycles within this year only ──────────
-        // yearStartKey to yearEndKey = number of cycles in this year
-        const cyclesThisYear = yearEndKey - yearStartKey + 1;
-        // But cap by how many cycles employee has been active (from DOJ)
-        const dojCycle = getCycleForDate(dojDate, startDay);
-        const dojKey = getCycleNumber(dojCycle.cycleYear, dojCycle.cycleMonth);
-        const activeFromKey = Math.max(dojKey, yearStartKey);
-        const annualCLPool = Math.max(0, yearEndKey - activeFromKey + 1);
-
-        let totalCLUsedAllYear = 0;
-        for (const leave of existingLeaves) {
-            totalCLUsedAllYear += leave.isSplit
-                ? (leave.clDays || 0)
-                : leave.totalDays;
-        }
-
-        const annualCLAvailable = Math.max(0, annualCLPool - totalCLUsedAllYear);
-
-        // ── Split leave by cycles ─────────────────────────────────────────
-        const leaveCycles = splitLeaveByCycles(startDate, endDate, startDay);
-
-        let totalClDays = 0;
-        let totalLopDays = 0;
-        const cycleAllocations = [];
-
-        for (const seg of leaveCycles) {
-            const segCycleKey = getCycleNumber(seg.cycleYear, seg.cycleMonth);
-
-            // CL already used in THIS cycle by other leaves
-            let usedInThisCycle = 0;
-            for (const leave of existingLeaves) {
-                const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-                const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-                if (lcKey === segCycleKey) {
-                    usedInThisCycle += leave.isSplit
-                        ? (leave.clDays || 0)
-                        : leave.totalDays;
-                }
-            }
-
-            // CL earned up to and including this segment's cycle
-            const earnedUpToSeg = Math.min(
-                calculateTotalCLEarned(dojDate, seg.cycleYear, seg.cycleMonth, startDay),
-                annualCLPool
-            );
-
-            // CL used in cycles BEFORE this one
-            let usedBeforeThisCycle = 0;
-            for (const leave of existingLeaves) {
-                const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-                const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-                if (lcKey < segCycleKey) {
-                    usedBeforeThisCycle += leave.isSplit
-                        ? (leave.clDays || 0)
-                        : leave.totalDays;
-                }
-            }
-
-            const cycleAvailable = Math.max(
-                0,
-                earnedUpToSeg - usedBeforeThisCycle - usedInThisCycle - totalClDays
-            );
-
-            const annualPoolRemaining = Math.max(0, annualCLAvailable - totalClDays);
-            const availableForSeg = Math.min(cycleAvailable, annualPoolRemaining);
-            const clForSeg = Math.min(seg.dayCount, availableForSeg);
-            const lopForSeg = seg.dayCount - clForSeg;
-
-            totalClDays += clForSeg;
-            totalLopDays += lopForSeg;
-
-            cycleAllocations.push({
-                cycleKey: segCycleKey,
-                cycleLabel: seg.cycleLabel,
-                daysInCycle: seg.dayCount,
-                clAllocated: clForSeg,
-                lopAllocated: lopForSeg,
-            });
-        }
-
-        totalClDays = parseFloat(totalClDays.toFixed(2));
-        totalLopDays = parseFloat(totalLopDays.toFixed(2));
-        const isSplit = totalClDays > 0 && totalLopDays > 0;
-
-        let splitNote = null;
-        if (isSplit) {
-            splitNote = cycleAllocations.length > 1
-                ? cycleAllocations.map(c =>
-                    `${c.cycleLabel}: ${c.clAllocated} CL + ${c.lopAllocated} LOP`
-                ).join('; ')
-                : `${totalClDays} CL + ${totalLopDays} LOP`;
-        }
-
-        console.log('allocateCLForLeave result:', {
-            requestedDays, totalClDays, totalLopDays, isSplit,
-            annualCLPool, totalCLUsedAllYear, annualCLAvailable, cycleAllocations
-        });
-
-        return { clDays: totalClDays, lopDays: totalLopDays, isSplit, splitNote, cycleAllocations };
-
-    } catch (error) {
-        console.error('Error in allocateCLForLeave:', error);
-        return { clDays: 0, lopDays: requestedDays, isSplit: false, splitNote: null, cycleAllocations: [] };
-    }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// getAvailableCL — snapshot for validation / display
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returns the current CL balance as of a reference date.
- */
-export const getAvailableCL = async (employeeId, doj, refDate, startDay, year) => {
-    const dojDate = dayjs.utc(doj);
-    const ref = dayjs.utc(refDate);
-    const targetCycle = getCycleForDate(ref, startDay);
-
-    const totalEarned = calculateTotalCLEarned(
-        dojDate, targetCycle.cycleYear, targetCycle.cycleMonth, startDay
-    );
-
-    const fetchStart = dayjs.utc(`${year - 1}-12-01`).startOf('day').toDate();
-    const fetchEnd = dayjs.utc(`${year + 1}-01-31`).endOf('day').toDate();
-
-    const usedResult = await Leave.aggregate([
+    // Total CL used this year (approved + pending, counting clDays for split leaves)
+    const usedAgg = await Leave.aggregate([
         {
             $match: {
-                employee: employeeId,
-                leaveType: 'CASUAL',
-                status: { $in: ['APPROVED', 'PENDING'] },
-                startDate: { $gte: fetchStart, $lte: fetchEnd },
+                employee:  employeeId,
+                leaveType: { $in: ['CASUAL'] },
+                status:    { $in: ['APPROVED', 'PENDING'] },
+                startDate: {
+                    $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                    $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+                },
             },
         },
         {
             $group: {
-                _id: null,
-                totalUsed: {
+                _id:  null,
+                used: {
                     $sum: {
                         $cond: [
                             { $eq: ['$isSplit', true] },
@@ -621,232 +487,236 @@ export const getAvailableCL = async (employeeId, doj, refDate, startDay, year) =
             },
         },
     ]);
+    const used = +(usedAgg?.[0]?.used ?? 0).toFixed(2);
 
-    const totalUsed = usedResult?.[0]?.totalUsed || 0;
-
-    return {
-        earned: totalEarned,
-        used: parseFloat(totalUsed.toFixed(2)),
-        remaining: Math.max(0, totalEarned - totalUsed),
-    };
+    return { earned, used, available: Math.max(0, earned - used) };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// calculateLeaveBalance — full balance summary
+// 7. FULL LEAVE BALANCE (for the balance API endpoint)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * calculateLeaveBalance(employeeId, isPermanentEmp, year, referenceDate)
+ *
+ * Returns the full balance object used by the frontend:
+ *   casual.monthlyBreakdown[]  — per-month view, includes cumulativeBalance
+ *   casual.earnedToDate        — how many months earned so far
+ *   casual.usedToDate          — CL used so far
+ *   casual.availableNow        — what can be taken right now (carry-forward included)
+ *   casual.annualPool          — total CL for the year (e.g. 12)
+ *   casual.annualRemaining     — how much CL is left for the rest of the year
+ */
 export const calculateLeaveBalance = async (
     employeeId,
-    isPermanentEmp = false,
-    year = dayjs.utc().year(),
-    referenceDate = null
+    isPermanentEmp  = false,
+    year            = dayjs.utc().year(),
+    referenceDate   = null
 ) => {
     try {
-        const policy = await LeavePolicy.findOne({ isActive: true }).lean();
-        const startDay = policy?.salaryCycle?.startDay ?? 21;
-        const slDaysPerYear = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
-        const maternityDays = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
-        const paternityDays = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
+        const policy              = await LeavePolicy.findOne({ isActive: true }).lean();
+        const salaryCycleStartDay = policy?.salaryCycle?.startDay          ?? 21;
+        const slDaysPerYear       = policy?.leaveTypes?.sick?.daysPerYear   ?? 10;
+        const maternityDays       = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
+        const paternityDays       = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
         const maxPermHoursPerMonth = policy?.permissionLeave?.hoursPerMonth ?? 2;
 
         const ref = referenceDate ? dayjs.utc(referenceDate) : dayjs.utc();
-        const employee = await Employee.findById(employeeId)
-            .select('doj createdAt isPermanentEmp')
-            .lean();
 
-
+        const employee = await Employee.findById(employeeId).select('doj createdAt isPermanentEmp').lean();
         if (!employee) throw new Error('Employee not found');
+        const doj = dayjs.utc(employee.doj ?? employee.createdAt);
 
-        const doj = employee.doj
-            ? dayjs.utc(employee.doj)
-            : dayjs.utc(employee.createdAt);
+        // ── Build buckets and replay existing leaves ─────────────────────────
+        const buckets = buildCLBuckets(doj, year);
 
-        const fetchStart = dayjs.utc(`${year - 1}-12-01`).startOf('day').toDate();
-        const fetchEnd = dayjs.utc(`${year + 1}-01-31`).endOf('day').toDate();
-
-        // AFTER — fetch ALL leave types for LOP calc:
-        // REPLACE WITH — only leaves whose cycle belongs to this year:
-        const allCasualLeaves = await Leave.find({
-            employee: employeeId,
-            leaveType: 'CASUAL',
-            status: { $in: ['APPROVED', 'PENDING'] },
+        const yearLeaves = await Leave.find({
+            employee:  employeeId,
+            leaveType: { $in: ['CASUAL', 'LOP'] },
+            status:    { $in: ['APPROVED', 'PENDING'] },
+            startDate: {
+                $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+            },
         }).lean();
 
-        const yearStartCycle = getCycleForDate(dayjs.utc(`${year}-01-01`), startDay);
-        const yearStartKey = getCycleNumber(yearStartCycle.cycleYear, yearStartCycle.cycleMonth);
-        const yearEndCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
-        const yearEndKey = getCycleNumber(yearEndCycle.cycleYear, yearEndCycle.cycleMonth);
+        replayLeavesOnBuckets(buckets, yearLeaves);
 
-        const approvedLeaves = allCasualLeaves.filter(leave => {
-            const lc = getCycleForDate(dayjs.utc(leave.startDate), startDay);
-            const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-            return lcKey >= yearStartKey && lcKey <= yearEndKey;
+        // ── Determine "current cycle month" based on salary cycle start day ─
+        //
+        // Example: salaryCycleStartDay = 21
+        //   Today = May 24  → we are inside the May 21–Jun 20 cycle
+        //                    → the cycle's END month = June (index 5)
+        //                    → so currentMonth = 5 (June), NOT 4 (May)
+        //
+        //   Today = May 10  → we are inside the Apr 21–May 20 cycle
+        //                    → the cycle's END month = May (index 4)
+        //                    → currentMonth = 4 (May)
+        //
+        // Rule: if today's date >= salaryCycleStartDay,
+        //         cycle spans this month → next month, so END month = next month
+        //       else
+        //         cycle spans prev month → this month, so END month = this month
+        const refDay = ref.date();
+        const currentMonth = refDay >= salaryCycleStartDay
+            ? ref.add(1, 'month').month()   // cycle end = next calendar month
+            : ref.month();                  // cycle end = this calendar month
+        const currentMonthKey = mKey(year, currentMonth);
+
+        const annualPool    = buckets.reduce((s, b) => s + b.earned, 0);
+        const earnedToDate  = buckets.filter(b => b.key <= currentMonthKey).reduce((s, b) => s + b.earned, 0);
+        const usedToDate    = +buckets.filter(b => b.key <= currentMonthKey).reduce((s, b) => s + b.used, 0).toFixed(2);
+        const availableNow  = Math.max(0, earnedToDate - usedToDate);
+        const annualRemaining = Math.max(0, annualPool - buckets.reduce((s, b) => s + b.used, 0));
+
+        // ── Monthly breakdown with cumulative carry-forward ──────────────────
+        let cumEarned = 0, cumUsed = 0;
+        const monthlyBreakdown = buckets.map(b => {
+            if (b.earned > 0) cumEarned++;
+            cumUsed += b.used;
+            const cumBalance = Math.max(0, cumEarned - cumUsed);
+            return {
+                month:            b.monthName,
+                monthShort:       b.monthShort,
+                label:            b.label,
+                key:              b.key,
+                earned:           b.earned,       // 1 if this month earns CL, else 0
+                usedFromBucket:   b.used,          // CL drawn FROM this specific bucket
+                remainingInBucket: b.remaining,   // CL left in this specific bucket
+                cumulativeEarned: cumEarned,       // total earned up to this month
+                cumulativeUsed:   +cumUsed.toFixed(2),
+                cumulativeBalance: +cumBalance.toFixed(2), // carry-forward balance
+                isCurrent:        b.key === currentMonthKey,
+                isFuture:         b.key >  currentMonthKey,
+                isEarned:         b.earned > 0,
+            };
         });
 
-        // Fetch LOP leaves separately
-        const lopLeavesAll = await Leave.find({
-            employee: employeeId,
+        // ── LOP days this year ───────────────────────────────────────────────
+        const lopLeaves = await Leave.find({
+            employee:  employeeId,
             leaveType: 'LOP',
-            status: { $in: ['APPROVED', 'PENDING'] },
+            status:    { $in: ['APPROVED', 'PENDING'] },
+            startDate: { $gte: dayjs.utc(`${year}-01-01`).toDate(), $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate() },
         }).lean();
+        const splitLopDays = yearLeaves.filter(l => l.isSplit).reduce((s, l) => s + (l.lopDays || 0), 0);
+        const lopDaysTotal  = +(lopLeaves.reduce((s, l) => s + l.totalDays, 0) + splitLopDays).toFixed(2);
 
-        // ── Current cycle ────────────────────────────────────────────────────
-        const currentCycleMeta = getCycleForDate(ref, startDay);
-        const currentCycleKey = getCycleNumber(currentCycleMeta.cycleYear, currentCycleMeta.cycleMonth);
+        // ── Permission quota (uses salary cycle, not calendar month) ─────────
+        // refDay is already declared above — reuse it here
+        const cycleStart = refDay >= salaryCycleStartDay
+            ? ref.date(salaryCycleStartDay).startOf('day')
+            : ref.subtract(1, 'month').date(salaryCycleStartDay).startOf('day');
+        const cycleEnd   = cycleStart.add(1, 'month').subtract(1, 'day').endOf('day');
 
-        // ── Total CL earned now ──────────────────────────────────────────────
-        const totalEarnedNow = calculateTotalCLEarned(
-            doj, currentCycleMeta.cycleYear, currentCycleMeta.cycleMonth, startDay
-        );
-
-        // ── Total CL used globally ───────────────────────────────────────────
-        // REPLACE WITH — year-scoped pool is always max 12 (or fewer if new hire mid-year):
-        const decCycle = getCycleForDate(dayjs.utc(`${year}-12-20`), startDay);
-        const annualPool = calculateTotalCLEarned(doj, decCycle.cycleYear, decCycle.cycleMonth, startDay);
-        // annualPool now returns cycles from Jan of this year → Dec of this year (max 12)
-        let clUsedTotal = 0;
-        for (const leave of approvedLeaves) {
-            clUsedTotal += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
-        }
-        // Cap used at annual pool (can't use more than 12)
-        clUsedTotal = Math.min(clUsedTotal, annualPool);
-        const clUsedEffective = Math.min(clUsedTotal, totalEarnedNow); // cap to what's earned today for display
-        const clRemaining = Math.max(0, totalEarnedNow - clUsedEffective);
-        const monthlyBreakdown = [];
-        for (let m = 0; m <= 11; m++) {
-            const probeDate = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-15`);
-            const cycle = getCycleForDate(probeDate, startDay);
-            const cycleKey = getCycleNumber(cycle.cycleYear, cycle.cycleMonth);
-
-            const earnedUpTo = calculateTotalCLEarned(doj, cycle.cycleYear, cycle.cycleMonth, startDay);
-
-            // CL used in cycles up to and including this one
-            let usedUpToCycle = 0;
-            for (const leave of approvedLeaves) {
-                const leaveStartDate = dayjs.utc(leave.startDate).format('YYYY-MM-DD'); // normalize
-                const lc = getCycleForDate(dayjs.utc(leaveStartDate), startDay);
-                const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-                if (lcKey <= cycleKey) {
-                    usedUpToCycle += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
-                }
-            }
-
-            // CL used in exactly this cycle
-            let usedInThisCycle = 0;
-            for (const leave of approvedLeaves) {
-                const leaveStartDate = dayjs.utc(leave.startDate).format('YYYY-MM-DD');
-                const lc = getCycleForDate(dayjs.utc(leaveStartDate), startDay);
-                const lcKey = getCycleNumber(lc.cycleYear, lc.cycleMonth);
-                if (lcKey === cycleKey) {
-                    usedInThisCycle += leave.isSplit ? (leave.clDays || 0) : leave.totalDays;
-                }
-            }
-
-            const isFuture = cycleKey > currentCycleKey;
-            const isCurrent = cycleKey === currentCycleKey;
-            // isEarned = DOJ has passed this cycle (even if future in calendar)
-            const isEarned = earnedUpTo > 0;
-            // REPLACE WITH:
-            const usedUpToCycleCapped = Math.min(usedUpToCycle, earnedUpTo);
-            // For future months: remaining = earnedUpTo (projected) minus used so far
-            // For past/current: remaining = earned up to that cycle minus cumulative used
-            const remainingUpTo = Math.max(0, earnedUpTo - usedUpToCycleCapped);
-            monthlyBreakdown.push({
-                month: probeDate.format('MMMM'),
-                cycleLabel: cycle.cycleLabel,
-                earned: earnedUpTo,
-                usedThisCycle: parseFloat(usedInThisCycle.toFixed(2)),
-                usedCumulative: parseFloat(usedUpToCycle.toFixed(2)),
-                remaining: remainingUpTo,
-                isFuture,
-                isCurrent,
-                isEarned: earnedUpTo > 0,
-                quota: earnedUpTo > 0 ? 1 : 0,
-            });
-        }
-
-        // ── Permission balance for current cycle ─────────────────────────────
         const permissionsThisCycle = await Permission.find({
             employee: employeeId,
-            date: {
-                $gte: currentCycleMeta.start.toDate(),
-                $lte: currentCycleMeta.end.toDate(),
-            },
-            status: { $in: ['PENDING', 'APPROVED'] },
+            date:     { $gte: cycleStart.toDate(), $lte: cycleEnd.toDate() },
+            status:   { $in: ['PENDING', 'APPROVED'] },
         }).lean();
+        const permUsedHours      = +permissionsThisCycle.reduce((s, p) => s + (p.durationHours || 0), 0).toFixed(2);
+        const permRemainingHours = +Math.max(0, maxPermHoursPerMonth - permUsedHours).toFixed(2);
 
-        const permUsedHours = permissionsThisCycle.reduce((s, p) => s + (p.durationHours || 0), 0);
-        const permRemainingHours = Math.max(0, maxPermHoursPerMonth - permUsedHours);
-
-        // ── LOP days (this year) ─────────────────────────────────────────────
-        // AFTER:
-        const lopDaysTotal = lopLeavesAll.reduce((s, l) => s + l.totalDays, 0)
-            + approvedLeaves.filter(l => l.isSplit).reduce((s, l) => s + (l.lopDays || 0), 0);
-        // ── Build response ───────────────────────────────────────────────────
-        // REPLACE WITH:
+        // ── Compose response ─────────────────────────────────────────────────
         const response = {
             year,
-            doj: doj.format('YYYY-MM-DD'),
-            salaryCycleStartDay: startDay,
+            doj:                 doj.format('YYYY-MM-DD'),
             isPermanentEmployee: employee.isPermanentEmp || false,
             casual: {
-                earnedThisYear: totalEarnedNow,
-                annualPool: annualPool,
-                usedThisYear: parseFloat(clUsedEffective.toFixed(2)),
-                remainingThisYear: clRemaining,
-                annualRemaining: Math.max(0, annualPool - clUsedTotal),
-                policyNote: '1 CL per salary-cycle month from DOJ; unused days carry forward automatically',
-                monthlyBreakdown: monthlyBreakdown,
+                annualPool,
+                earnedToDate,
+                usedToDate,
+                availableNow,
+                annualRemaining,
+                policyNote: '1 CL per calendar month · unused carries forward within the year · no cross-year carry',
+                monthlyBreakdown,
             },
             lop: {
-                days: parseFloat(lopDaysTotal.toFixed(2)),
+                daysThisYear: lopDaysTotal,
             },
             permission: {
-                hoursPerMonth: maxPermHoursPerMonth,
-                usedThisCycle: parseFloat(permUsedHours.toFixed(2)),
-                remainingThisCycle: parseFloat(permRemainingHours.toFixed(2)),
-                maxPerRequest: 1,
-                policyNote: `${maxPermHoursPerMonth} hrs/month; max 1 hr per request`,
+                hoursPerMonth:      maxPermHoursPerMonth,
+                usedThisCycle:      permUsedHours,
+                remainingThisCycle: permRemainingHours,
+                maxPerRequest:      1,
+                cycleLabel:         `${cycleStart.format('DD MMM')} – ${cycleEnd.format('DD MMM YYYY')}`,
             },
-            currentCycle: {
-                start: currentCycleMeta.start.format('YYYY-MM-DD'),
-                end: currentCycleMeta.end.format('YYYY-MM-DD'),
-                label: currentCycleMeta.cycleLabel,
+            currentMonth: {
+                // Show the cycle's current month (end month of current salary cycle)
+                // e.g. today=May 24, cycle=May21–Jun20 → shows "June 2026"
+                month: dayjs.utc().month(currentMonth).format('MMMM'),
+                year,
+                label: dayjs.utc(`${year}-${String(currentMonth + 1).padStart(2, '0')}-01`).format('MMMM YYYY'),
             },
+            salaryCycleStartDay,
         };
 
-        // Permanent-employee extras
+        // ── Permanent employee leave types ───────────────────────────────────
         if (isPermanentEmp) {
-            const permanentLeaves = await Leave.find({
-                employee: employeeId,
+            const permLeaves = await Leave.find({
+                employee:  employeeId,
                 leaveType: { $in: ['SICK', 'MATERNITY', 'PATERNITY'] },
-                status: { $in: ['APPROVED', 'PENDING'] },
+                status:    { $in: ['APPROVED', 'PENDING'] },
+                startDate: { $gte: dayjs.utc(`${year}-01-01`).toDate(), $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate() },
             }).lean();
-            const sickUsed = permanentLeaves.filter(l => l.leaveType === 'SICK').reduce((s, l) => s + l.totalDays, 0);
-            const maternityUsed = permanentLeaves.filter(l => l.leaveType === 'MATERNITY').reduce((s, l) => s + l.totalDays, 0);
-            const paternityUsed = permanentLeaves.filter(l => l.leaveType === 'PATERNITY').reduce((s, l) => s + l.totalDays, 0);
-            response.sick = {
-                total: slDaysPerYear,
-                used: sickUsed,
-                remaining: Math.max(0, slDaysPerYear - sickUsed),
-                usedPercentage: Math.round((sickUsed / slDaysPerYear) * 100),
-            };
-            response.maternity = {
-                total: maternityDays,
-                used: maternityUsed,
-                remaining: Math.max(0, maternityDays - maternityUsed),
-            };
-            response.paternity = {
-                total: paternityDays,
-                used: paternityUsed,
-                remaining: Math.max(0, paternityDays - paternityUsed),
-            };
+
+            const sickUsed      = permLeaves.filter(l => l.leaveType === 'SICK').reduce((s, l) => s + l.totalDays, 0);
+            const maternityUsed = permLeaves.filter(l => l.leaveType === 'MATERNITY').reduce((s, l) => s + l.totalDays, 0);
+            const paternityUsed = permLeaves.filter(l => l.leaveType === 'PATERNITY').reduce((s, l) => s + l.totalDays, 0);
+
+            response.sick      = { total: slDaysPerYear,  used: sickUsed,      remaining: Math.max(0, slDaysPerYear  - sickUsed) };
+            response.maternity = { total: maternityDays,  used: maternityUsed, remaining: Math.max(0, maternityDays  - maternityUsed) };
+            response.paternity = { total: paternityDays,  used: paternityUsed, remaining: Math.max(0, paternityDays  - paternityUsed) };
         }
 
         return response;
 
-    } catch (error) {
-        console.error('Error in calculateLeaveBalance:', error);
-        throw error;
+    } catch (err) {
+        console.error('calculateLeaveBalance error:', err);
+        throw err;
     }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. CL ALLOCATION DETAIL  (for the detail modal)
+//    Shows per-bucket usage and per-day FIFO trail (in application order).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * getCLAllocationDetail(employeeId, year)
+ *
+ * Returns:
+ *   bucketSummary[]      — 12 monthly buckets: earned / used / remaining
+ *   allocationRecords[]  — per-day trail in application order:
+ *                          which bucket was used (or LOP) for each leave day
+ */
+export const getCLAllocationDetail = async (employeeId, year) => {
+    const employee = await Employee.findById(employeeId).select('doj createdAt').lean();
+    if (!employee) throw new Error('Employee not found');
+    const doj = dayjs.utc(employee.doj ?? employee.createdAt);
+
+    const yearLeaves = await Leave.find({
+        employee:  employeeId,
+        leaveType: { $in: ['CASUAL', 'LOP'] },
+        status:    { $in: ['APPROVED', 'PENDING'] },
+        startDate: {
+            $gte: dayjs.utc(`${year}-01-01`).toDate(),
+            $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+        },
+    }).lean();
+
+    const buckets           = buildCLBuckets(doj, year);
+    const allocationRecords = replayLeavesOnBuckets(buckets, yearLeaves);
+
+    const bucketSummary = buckets.map(b => ({
+        key:              b.key,
+        month:            b.monthName,
+        monthShort:       b.monthShort,
+        label:            b.label,
+        earned:           b.earned,
+        usedFromBucket:   b.used,
+        remainingInBucket: b.remaining,
+    }));
+
+    return { bucketSummary, allocationRecords };
 };
