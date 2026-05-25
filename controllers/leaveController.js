@@ -26,7 +26,7 @@ import {
 } from '../validations/leaveValidation.js';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
-
+import { recalculateAfterCancel } from '../utils/leaveRecalculation.js';
 dayjs.extend(utc);
 
 // ─── Shared utilities (also used by permissionController) ─────────────────────
@@ -37,43 +37,43 @@ export const validate = (schema, data) => {
     return { ok: true, data: value };
 };
 
-export const sanitize  = (s = '') => s.replace(/<[^>]*>/g, '').trim();
-export const fmtType   = t => ({ CASUAL: 'Casual Leave', SICK: 'Sick Leave', MATERNITY: 'Maternity Leave', PATERNITY: 'Paternity Leave', LOP: 'Loss of Pay' }[t] ?? t);
-export const fmtDur    = d => ({ FULL_DAY: 'Full Day', FIRST_HALF: 'First Half', SECOND_HALF: 'Second Half' }[d] ?? d);
+export const sanitize = (s = '') => s.replace(/<[^>]*>/g, '').trim();
+export const fmtType = t => ({ CASUAL: 'Casual Leave', SICK: 'Sick Leave', MATERNITY: 'Maternity Leave', PATERNITY: 'Paternity Leave', LOP: 'Loss of Pay' }[t] ?? t);
+export const fmtDur = d => ({ FULL_DAY: 'Full Day', FIRST_HALF: 'First Half', SECOND_HALF: 'Second Half' }[d] ?? d);
 export const fmtStatus = s => ({ PENDING: 'Pending', APPROVED: 'Approved', REJECTED: 'Rejected', CANCELLED: 'Cancelled' }[s] ?? s);
-export const toUTC     = d => d ? dayjs.utc(d).startOf('day').toDate() : null;
-export const toStr     = d => d ? dayjs.utc(d).format('YYYY-MM-DD') : null;
-export const paginate  = (total, page, limit) => ({ total, page, limit, totalPages: Math.ceil(total / limit), hasNext: page < Math.ceil(total / limit), hasPrev: page > 1 });
-export const fmtUser   = u => ({ id: u._id, name: `${u.firstName} ${u.lastName}`, email: u.email, role: u.role });
+export const toUTC = d => d ? dayjs.utc(d).startOf('day').toDate() : null;
+export const toStr = d => d ? dayjs.utc(d).format('YYYY-MM-DD') : null;
+export const paginate = (total, page, limit) => ({ total, page, limit, totalPages: Math.ceil(total / limit), hasNext: page < Math.ceil(total / limit), hasPrev: page > 1 });
+export const fmtUser = u => ({ id: u._id, name: `${u.firstName} ${u.lastName}`, email: u.email, role: u.role });
 
 export const fmtLeave = (l, withDetail = false) => {
     const base = {
-        id:              l._id,
-        requestId:       l.requestId,
-        leaveType:       fmtType(l.leaveType),
-        leaveTypeRaw:    l.leaveType,
-        leaveDuration:   fmtDur(l.leaveDuration),
-        startDate:       toStr(l.startDate),
-        endDate:         toStr(l.endDate),
-        totalDays:       l.totalDays,
-        clDays:          l.clDays          ?? 0,
-        lopDays:         l.lopDays         ?? 0,
-        isSplit:         l.isSplit         ?? false,
-        isLOP:           l.leaveType === 'LOP',
-        isPartialLOP:    l.isSplit         ?? false,
-        sandwichDays:    l.sandwichDays    ?? 0,
-        sandwichDates:   l.sandwichDates   ?? [],
+        id: l._id,
+        requestId: l.requestId,
+        leaveType: fmtType(l.leaveType),
+        leaveTypeRaw: l.leaveType,
+        leaveDuration: fmtDur(l.leaveDuration),
+        startDate: toStr(l.startDate),
+        endDate: toStr(l.endDate),
+        totalDays: l.totalDays,
+        clDays: l.clDays ?? 0,
+        lopDays: l.lopDays ?? 0,
+        isSplit: l.isSplit ?? false,
+        isLOP: l.leaveType === 'LOP',
+        isPartialLOP: l.isSplit ?? false,
+        sandwichDays: l.sandwichDays ?? 0,
+        sandwichDates: l.sandwichDates ?? [],
         clBucketSummary: l.clBucketSummary ?? [],
-        reason:          l.reason,
-        status:          fmtStatus(l.status),
-        appliedAt:       l.appliedAt,
+        reason: l.reason,
+        status: fmtStatus(l.status),
+        appliedAt: l.appliedAt,
         approvedComments: l.approvedComments,
         rejectedComments: l.rejectedComments,
-        approvedAt:      l.approvedAt,
-        rejectedAt:      l.rejectedAt,
-        department:      l.department,
-        employeeName:    l.employeeName,
-        employeeId:      l.employeeId,
+        approvedAt: l.approvedAt,
+        rejectedAt: l.rejectedAt,
+        department: l.department,
+        employeeName: l.employeeName,
+        employeeId: l.employeeId,
     };
     if (withDetail) {
         base.approvedBy = l.approvedBy ? fmtUser(l.approvedBy) : null;
@@ -87,10 +87,10 @@ export const fmtLeave = (l, withDetail = false) => {
 export const createLeaveRequest = async (req, res) => {
     try {
         const user = req.user;
-        const v    = validate(createLeaveValidation, req.body);
+        const v = validate(createLeaveValidation, req.body);
         if (!v.ok) return res.status(400).json({ success: false, message: 'Validation failed', errors: v.errors });
 
-        const body  = v.data;
+        const body = v.data;
         body.reason = sanitize(body.reason);
 
         const employee = await Employee.findById(user._id)
@@ -98,7 +98,7 @@ export const createLeaveRequest = async (req, res) => {
         if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
 
         const isPermanent = employee.isPermanentEmp || false;
-        const doj         = employee.doj ?? employee.createdAt;
+        const doj = employee.doj ?? employee.createdAt;
 
         if (['SICK', 'MATERNITY', 'PATERNITY'].includes(body.leaveType) && !isPermanent)
             return res.status(403).json({ success: false, message: `${fmtType(body.leaveType)} is for permanent employees only` });
@@ -112,7 +112,7 @@ export const createLeaveRequest = async (req, res) => {
             });
 
         const startDateObj = toUTC(body.startDate);
-        const endDateObj   = body.leaveDuration !== 'FULL_DAY' ? toUTC(body.startDate) : toUTC(body.endDate);
+        const endDateObj = body.leaveDuration !== 'FULL_DAY' ? toUTC(body.startDate) : toUTC(body.endDate);
 
         const baseCalDays = body.leaveDuration !== 'FULL_DAY' ? 0.5
             : dayjs.utc(endDateObj).startOf('day').diff(dayjs.utc(startDateObj).startOf('day'), 'day') + 1;
@@ -122,25 +122,31 @@ export const createLeaveRequest = async (req, res) => {
 
         const policy = await LeavePolicy.findOne({ isActive: true }).lean();
 
-        let finalLeaveType  = body.leaveType;
-        let clDays          = 0;
-        let lopDays         = 0;
-        let isSplit         = false;
-        let isFullLOP       = false;
-        let sandwichDays    = 0;
-        let sandwichDates   = [];
-        let totalDays       = baseCalDays;
+        let finalLeaveType = body.leaveType;
+        let clDays = 0;
+        let lopDays = 0;
+        let isSplit = false;
+        let isFullLOP = false;
+        let sandwichDays = 0;
+        let sandwichDates = [];
+        let totalDays = baseCalDays;
         let clBucketSummary = [];
-        let successMessage  = 'Leave request submitted successfully';
+        let successMessage = 'Leave request submitted successfully';
 
         // ── CASUAL ────────────────────────────────────────────────────────────
         if (body.leaveType === 'CASUAL') {
             if (body.leaveDuration === 'FULL_DAY') {
                 try {
-                    const holidays    = await Holiday.find({ year: dayjs.utc(startDateObj).year() }).lean();
+                    const holidays = await Holiday.find({ year: dayjs.utc(startDateObj).year() }).lean();
                     const holidayStrs = holidays.map(h => dayjs.utc(h.date).format('YYYY-MM-DD'));
-                    const sw          = await calculateSandwichDays(user._id, startDateObj, endDateObj, holidayStrs);
-                    sandwichDays  = sw.totalSandwichDays;
+                    const sw = await calculateSandwichDays(
+                        user._id,
+                        startDateObj,
+                        endDateObj,
+                        holidayStrs,
+                        policy?.salaryCycle?.startDay ?? 1,   // ✅ ADDED: salary-cycle-aware gap check
+                    );
+                    sandwichDays = sw.totalSandwichDays;
                     sandwichDates = sw.sandwichDates;
                 } catch (e) {
                     console.warn('Sandwich check failed, proceeding without:', e.message);
@@ -155,10 +161,10 @@ export const createLeaveRequest = async (req, res) => {
                 sandwichDays, sandwichDates,
             });
 
-            clDays          = alloc.clDays;
-            lopDays         = alloc.lopDays;
-            isSplit         = alloc.isSplit;
-            isFullLOP       = alloc.isFullLOP;
+            clDays = alloc.clDays;
+            lopDays = alloc.lopDays;
+            isSplit = alloc.isSplit;
+            isFullLOP = alloc.isFullLOP;
             clBucketSummary = alloc.clBucketSummary;
 
             if (isFullLOP) {
@@ -174,9 +180,9 @@ export const createLeaveRequest = async (req, res) => {
             if (sandwichDays > 0)
                 successMessage += ` Sandwich: ${sandwichDates.map(d => dayjs.utc(d).format('DD MMM')).join(', ')} (${sandwichDays}d added).`;
 
-        // ── SICK ──────────────────────────────────────────────────────────────
+            // ── SICK ──────────────────────────────────────────────────────────────
         } else if (body.leaveType === 'SICK') {
-            const max  = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
+            const max = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
             const used = await Leave.aggregate([
                 { $match: { employee: user._id, leaveType: 'SICK', status: { $in: ['APPROVED', 'PENDING'] }, startDate: { $gte: toUTC(`${dayjs.utc().year()}-01-01`) } } },
                 { $group: { _id: null, total: { $sum: '$totalDays' } } },
@@ -187,9 +193,9 @@ export const createLeaveRequest = async (req, res) => {
             if (totalDays > remaining) return res.status(400).json({ success: false, message: `Only ${remaining} sick day(s) remaining.` });
             finalLeaveType = 'SICK';
 
-        // ── PATERNITY ─────────────────────────────────────────────────────────
+            // ── PATERNITY ─────────────────────────────────────────────────────────
         } else if (body.leaveType === 'PATERNITY') {
-            const max  = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
+            const max = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
             const used = await Leave.aggregate([
                 { $match: { employee: user._id, leaveType: 'PATERNITY', status: { $in: ['APPROVED', 'PENDING'] }, startDate: { $gte: toUTC(`${dayjs.utc().year()}-01-01`) } } },
                 { $group: { _id: null, total: { $sum: '$totalDays' } } },
@@ -199,9 +205,9 @@ export const createLeaveRequest = async (req, res) => {
             if (totalDays > remaining) return res.status(400).json({ success: false, message: `Only ${remaining} paternity day(s) remaining.` });
             finalLeaveType = 'PATERNITY';
 
-        // ── MATERNITY ─────────────────────────────────────────────────────────
+            // ── MATERNITY ─────────────────────────────────────────────────────────
         } else if (body.leaveType === 'MATERNITY') {
-            const max  = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
+            const max = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
             const used = await Leave.aggregate([
                 { $match: { employee: user._id, leaveType: 'MATERNITY', status: { $in: ['APPROVED', 'PENDING'] }, startDate: { $gte: toUTC(`${dayjs.utc().year()}-01-01`) } } },
                 { $group: { _id: null, total: { $sum: '$totalDays' } } },
@@ -211,11 +217,11 @@ export const createLeaveRequest = async (req, res) => {
             if (totalDays > remaining) return res.status(400).json({ success: false, message: `Only ${remaining} maternity day(s) remaining.` });
             finalLeaveType = 'MATERNITY';
 
-        // ── Explicit LOP ──────────────────────────────────────────────────────
+            // ── Explicit LOP ──────────────────────────────────────────────────────
         } else {
             finalLeaveType = 'LOP';
-            lopDays        = baseCalDays;
-            totalDays      = baseCalDays;
+            lopDays = baseCalDays;
+            totalDays = baseCalDays;
         }
 
         if (totalDays <= 0) return res.status(400).json({ success: false, message: 'Invalid leave duration' });
@@ -223,27 +229,27 @@ export const createLeaveRequest = async (req, res) => {
         const requestId = await Leave.generateRequestId();
         const leave = new Leave({
             requestId,
-            leaveType:      finalLeaveType,
-            leaveDuration:  body.leaveDuration,
-            startDate:      startDateObj,
-            endDate:        endDateObj,
-            reason:         body.reason,
-            totalDays,      clDays,         lopDays,
-            isSplit,        sandwichDays,   sandwichDates,
+            leaveType: finalLeaveType,
+            leaveDuration: body.leaveDuration,
+            startDate: startDateObj,
+            endDate: endDateObj,
+            reason: body.reason,
+            totalDays, clDays, lopDays,
+            isSplit, sandwichDays, sandwichDates,
             clBucketSummary,
-            employee:       user._id,
-            employeeId:     employee.employeeId,
-            employeeName:   `${employee.firstName} ${employee.lastName}`,
-            department:     employee.department,
-            designation:    employee.designation,
-            employeeEmail:  employee.officialEmail,
+            employee: user._id,
+            employeeId: employee.employeeId,
+            employeeName: `${employee.firstName} ${employee.lastName}`,
+            department: employee.department,
+            designation: employee.designation,
+            employeeEmail: employee.officialEmail,
         });
         await leave.save();
 
         const hrAdmins = await EmployerUser.find({ role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] }, isActive: true });
         for (const hr of hrAdmins) {
             await Notification.create({
-                title:       isSplit ? 'New Leave (CL + LOP Split)' : 'New Leave Request',
+                title: isSplit ? 'New Leave (CL + LOP Split)' : 'New Leave Request',
                 description: `${employee.firstName} ${employee.lastName} — ${fmtType(finalLeaveType)} ${totalDays}d`,
                 type: 'LEAVE_REQUEST', recipientType: hr.role, recipientId: hr._id, recipientModel: 'EmployerUser',
                 senderId: user._id, senderModel: 'Employee', relatedEntityType: 'Leave', relatedEntityId: leave._id,
@@ -276,8 +282,8 @@ export const getMyLeaveRequests = async (req, res) => {
         if (!v.ok) return res.status(400).json({ success: false, message: 'Validation failed', errors: v.errors });
         const { status, leaveType, leaveDuration, page, limit, sortBy, sortOrder } = v.data;
         const q = { employee: req.user._id };
-        if (status        !== 'ALL') q.status        = status;
-        if (leaveType     !== 'ALL') q.leaveType     = leaveType;
+        if (status !== 'ALL') q.status = status;
+        if (leaveType !== 'ALL') q.leaveType = leaveType;
         if (leaveDuration !== 'ALL') q.leaveDuration = leaveDuration;
         const [leaves, total] = await Promise.all([
             Leave.find(q).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip((page - 1) * limit).limit(limit).select('-__v').lean(),
@@ -314,7 +320,7 @@ export const getLeaveBalance = async (req, res) => {
 
 export const getCLAllocationDetailController = async (req, res) => {
     try {
-        const year   = parseInt(req.query.year) || dayjs.utc().year();
+        const year = parseInt(req.query.year) || dayjs.utc().year();
         const detail = await getCLAllocationDetail(req.user._id, year);
         return res.json({ success: true, data: detail });
     } catch (err) {
@@ -329,7 +335,7 @@ export const getLeaveRequestById = async (req, res) => {
             .populate('rejectedBy', 'firstName lastName email role')
             .select('-__v').lean();
         if (!leave) return res.status(404).json({ success: false, message: 'Not found' });
-        const isOwner   = leave.employee.toString() === req.user._id.toString();
+        const isOwner = leave.employee.toString() === req.user._id.toString();
         const isHRAdmin = ['EMPLOYER_HR', 'EMPLOYER_ADMIN'].includes(req.user.role);
         if (!isOwner && !isHRAdmin) return res.status(403).json({ success: false, message: 'Not authorized' });
         return res.json({ success: true, data: fmtLeave(leave, true) });
@@ -338,38 +344,91 @@ export const getLeaveRequestById = async (req, res) => {
     }
 };
 
+/**
+ * leaveController.js — cancelLeaveRequest FINAL
+ *
+ * ── TWO CHANGES REQUIRED IN leaveController.js ────────────────────
+ *
+ * 1. At the top of the file, ADD this import
+ *    (remove any old recalculateCLAllocations import if present):
+ *
+ *      import { recalculateAfterCancel } from '../utils/leaveRecalculation.js';
+ *
+ * 2. Replace the entire cancelLeaveRequest export with this function.
+ * ──────────────────────────────────────────────────────────────────
+ */
+
 export const cancelLeaveRequest = async (req, res) => {
     try {
         const leave = await Leave.findOne({ requestId: req.params.leaveRequestId });
-        if (!leave) return res.status(404).json({ success: false, message: 'Not found' });
+        if (!leave)
+            return res.status(404).json({ success: false, message: 'Leave request not found' });
+
         if (leave.employee.toString() !== req.user._id.toString())
-            return res.status(403).json({ success: false, message: 'Not authorized' });
+            return res.status(403).json({ success: false, message: 'Not authorised' });
+
         if (!['PENDING', 'APPROVED'].includes(leave.status))
             return res.status(400).json({ success: false, message: `Cannot cancel a ${leave.status.toLowerCase()} leave` });
 
-        const today = dayjs.utc().startOf('day');
-        if (dayjs.utc(leave.startDate).startOf('day').isBefore(today))
+        if (dayjs.utc(leave.startDate).startOf('day').isBefore(dayjs.utc().startOf('day')))
             return res.status(400).json({ success: false, message: 'Cannot cancel a leave that has already started' });
 
-        const wasApproved         = leave.status === 'APPROVED';
+        // ── Save cancellation ─────────────────────────────────────────────────
+        const wasApproved        = leave.status === 'APPROVED';
+        const cancelledLeaveType = leave.leaveType;
+        const cancelledYear      = dayjs.utc(leave.startDate).year();
+
         leave.status              = 'CANCELLED';
         leave.cancelledAt         = new Date();
         leave.cancelledByEmployee = true;
         await leave.save();
 
+        // ── Recalculate: sandwich first, then CL/LOP FIFO ────────────────────
+        //
+        // recalculateAfterCancel does two things IN ORDER:
+        //   1. Strips sandwich days from any leave that relied on the cancelled
+        //      leave being adjacent (updates sandwichDates, sandwichDays, totalDays)
+        //   2. Re-runs FIFO bucket allocation with the corrected totalDays
+        //
+        let recalcResult = { sandwich: { updated: 0, changes: [] }, cl: { recalculated: 0, changes: [] }, allChanges: [] };
+
+        if (['CASUAL', 'LOP'].includes(cancelledLeaveType)) {
+            try {
+                recalcResult = await recalculateAfterCancel(req.user._id, cancelledYear);
+            } catch (err) {
+                console.error('[cancelLeave] recalculateAfterCancel failed (non-fatal):', err.message);
+            }
+        }
+
+        // ── Notify HR ─────────────────────────────────────────────────────────
         const hrAdmins = await EmployerUser.find({ role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] }, isActive: true });
         for (const hr of hrAdmins) {
             await Notification.create({
                 title:       wasApproved ? 'Approved Leave Cancelled' : 'Leave Cancelled',
                 description: `${leave.employeeName} cancelled ${fmtType(leave.leaveType)} (${leave.requestId})`,
                 type: 'LEAVE_CANCELLED', recipientType: hr.role, recipientId: hr._id, recipientModel: 'EmployerUser',
-                senderId: req.user._id, senderModel: 'Employee',
-                relatedEntityType: 'Leave', relatedEntityId: leave._id,
+                senderId: req.user._id, senderModel: 'Employee', relatedEntityType: 'Leave', relatedEntityId: leave._id,
                 status: 'unread', priority: wasApproved ? 'high' : 'low',
             });
         }
-        return res.json({ success: true, message: wasApproved ? 'Approved leave cancelled. HR notified.' : 'Leave cancelled', data: { requestId: leave.requestId, wasApproved } });
+
+        // ── Response ──────────────────────────────────────────────────────────
+        return res.json({
+            success: true,
+            message: wasApproved ? 'Approved leave cancelled. HR notified.' : 'Leave cancelled successfully.',
+            data: {
+                requestId: leave.requestId,
+                wasApproved,
+                recalculation: {
+                    sandwichUpdated: recalcResult.sandwich.updated,
+                    leavesUpdated:   recalcResult.cl.recalculated,
+                    allChanges:      recalcResult.allChanges,  // [{type, requestId, summary, before, after}]
+                },
+            },
+        });
+
     } catch (err) {
+        console.error('cancelLeaveRequest error:', err);
         return res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -382,15 +441,15 @@ export const getAllLeaveRequests = async (req, res) => {
         if (!v.ok) return res.status(400).json({ success: false, message: 'Validation failed', errors: v.errors });
         const { status, leaveType, leaveDuration, department, startDate, endDate, page, limit, sortBy, sortOrder } = v.data;
         const q = {};
-        if (status        !== 'ALL') q.status        = status;
-        if (leaveType     !== 'ALL') q.leaveType     = leaveType;
+        if (status !== 'ALL') q.status = status;
+        if (leaveType !== 'ALL') q.leaveType = leaveType;
         if (leaveDuration !== 'ALL') q.leaveDuration = leaveDuration;
         if (department) q.department = new RegExp(department, 'i');
         if (startDate && endDate) q.$or = [{ startDate: { $lte: toUTC(endDate) }, endDate: { $gte: toUTC(startDate) } }];
 
         const [leaves, total] = await Promise.all([
             Leave.find(q).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip((page - 1) * limit).limit(limit)
-                .populate('employee',   'firstName lastName officialEmail isPermanentEmp')
+                .populate('employee', 'firstName lastName officialEmail isPermanentEmp')
                 .populate('approvedBy', 'firstName lastName email role')
                 .populate('rejectedBy', 'firstName lastName email role')
                 .select('-__v').lean(),
@@ -426,12 +485,12 @@ export const updateLeaveStatus = async (req, res) => {
         if (leave.status !== 'PENDING') return res.status(400).json({ success: false, message: `Leave already ${leave.status.toLowerCase()}` });
 
         const isPastLeave = dayjs.utc(leave.startDate).startOf('day').isBefore(dayjs.utc().startOf('day'));
-        const updated     = status === 'APPROVED' ? await leave.approve(req.user._id, comments) : await leave.reject(req.user._id, comments);
+        const updated = status === 'APPROVED' ? await leave.approve(req.user._id, comments) : await leave.reject(req.user._id, comments);
 
         const emp = await Employee.findById(leave.employee).select('firstName lastName personalEmail').lean();
         if (emp) {
             await Notification.create({
-                title:       `Leave ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
+                title: `Leave ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
                 description: `Your ${fmtType(leave.leaveType)} (${leave.requestId}) has been ${status.toLowerCase()}.${comments ? ` Note: ${comments}` : ''}`,
                 type: status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
                 recipientType: 'EMPLOYEE', recipientId: leave.employee, recipientModel: 'Employee',
@@ -441,9 +500,9 @@ export const updateLeaveStatus = async (req, res) => {
             });
             setTimeout(async () => {
                 await sendMail({
-                    to:      emp.personalEmail,
+                    to: emp.personalEmail,
                     subject: `Leave ${status === 'APPROVED' ? 'Approved' : 'Rejected'} — ${updated.requestId}`,
-                    html:    leaveEmailTemplate(status === 'APPROVED' ? 'APPROVED_TO_EMPLOYEE' : 'REJECTED_TO_EMPLOYEE', leave),
+                    html: leaveEmailTemplate(status === 'APPROVED' ? 'APPROVED_TO_EMPLOYEE' : 'REJECTED_TO_EMPLOYEE', leave),
                 });
             }, 2000);
         }
@@ -462,7 +521,7 @@ export const getLeaveStatistics = async (req, res) => {
         const q = { startDate: { $gte: toUTC(`${year}-01-01`), $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate() } };
         if (department) q.department = new RegExp(department, 'i');
         if (!['EMPLOYER_HR', 'EMPLOYER_ADMIN'].includes(req.user.role)) q.employee = req.user._id;
-        const leaves  = await Leave.find(q).lean();
+        const leaves = await Leave.find(q).lean();
         const countBy = (key, val) => leaves.filter(l => l[key] === val).length;
         return res.json({
             success: true,
