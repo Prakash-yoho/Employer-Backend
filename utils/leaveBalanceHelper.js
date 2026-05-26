@@ -110,22 +110,76 @@ const cycleAwareMKeyOf = (dateStr, salaryCycleStartDay = 1) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. BUILD CL BUCKETS (unchanged)
+// 1. BUILD CL BUCKETS — FIXED: salary-cycle-aware first earned month
+//
+// OLD (broken):
+//   earned = 1 if m >= dojMonth  (raw calendar month)
+//   DOJ=May21, startDay=21: dojMonth=4(May) → May earns CL ← WRONG
+//   The May21 cycle ends in JUNE, so employee earns JUNE bucket first.
+//
+// NEW (correct):
+//   Convert DOJ to its cycle-end month key using cycleEndKeyOfDOJ().
+//   A bucket earns CL if bucket.key >= that first-cycle-end key.
+//
+//   DOJ=May21, startDay=21: first cycle end = June(24317)
+//   → Jan–May buckets: key < 24317 → earned=0
+//   → Jun–Dec buckets: key >= 24317 → earned=1  ✓
+//
+//   DOJ=May1, startDay=1: first cycle end = May(24316)
+//   → Jan–Apr: earned=0, May–Dec: earned=1  ✓
+//
+//   DOJ=May20, startDay=21: day=20 < 21 → cycle end = May(24316)
+//   → Jan–Apr: earned=0, May–Dec: earned=1  ✓
+//
+//   Prior-year DOJ: all 12 buckets earned ✓
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const buildCLBuckets = (dojDate, year) => {
-    const doj      = dayjs.utc(dojDate);
-    const dojYear  = doj.year();
-    const dojMonth = doj.month();
+/**
+ * Returns the mKey of the first salary cycle end month the employee earns.
+ * This is the cycle-end month of the DOJ date.
+ *
+ * Special case: salaryCycleStartDay=1 → cycles = calendar months →
+ *   use raw DOJ calendar month (avoid off-by-one from the >= formula).
+ */
+const cycleEndKeyOfDOJ = (dojDate, salaryCycleStartDay) => {
+    const d     = dayjs.utc(dojDate);
+    const year  = d.year();
+    const month = d.month();   // 0-indexed
+    const day   = d.date();
+
+    if (salaryCycleStartDay === 1) {
+        // Calendar-month cycles — earn the calendar month of DOJ
+        return mKey(year, month);
+    }
+    if (day >= salaryCycleStartDay) {
+        // DOJ is on or after cycle start → cycle ends NEXT calendar month
+        const em = (month + 1) % 12;
+        const ey = em === 0 ? year + 1 : year;
+        return mKey(ey, em);
+    } else {
+        // DOJ is before cycle start → cycle ends THIS calendar month
+        return mKey(year, month);
+    }
+};
+
+export const buildCLBuckets = (dojDate, year, salaryCycleStartDay = 1) => {
+    const doj         = dayjs.utc(dojDate);
+    const dojYear     = doj.year();
+
+    // Key of the first bucket the employee earns (salary-cycle-aware)
+    const firstEarnedKey = dojYear > year
+        ? Infinity                                           // DOJ is in the future → earns nothing
+        : dojYear < year
+            ? mKey(year, 0)                                 // DOJ before this year → all 12 buckets earned
+            : cycleEndKeyOfDOJ(dojDate, salaryCycleStartDay); // DOJ this year → cycle-aware
 
     return Array.from({ length: 12 }, (_, m) => {
-        let earned = 0;
-        if      (dojYear <  year)                      earned = 1;
-        else if (dojYear === year && m >= dojMonth)    earned = 1;
+        const bucketKey = mKey(year, m);
+        const earned    = bucketKey >= firstEarnedKey ? 1 : 0;
 
         const monthStart = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-01`);
         return {
-            key:        mKey(year, m),
+            key:        bucketKey,
             year,
             month:      m,
             monthName:  monthStart.format('MMMM'),
@@ -262,8 +316,8 @@ export const allocateCLForLeave = async ({
         const policy              = await LeavePolicy.findOne({ isActive: true }).lean();
         const salaryCycleStartDay = policy?.salaryCycle?.startDay ?? 1;
 
-        const allBuckets = buildCLBuckets(doj, year);
-        if (endYear > year) allBuckets.push(...buildCLBuckets(doj, endYear));
+        const allBuckets = buildCLBuckets(doj, year, salaryCycleStartDay);
+        if (endYear > year) allBuckets.push(...buildCLBuckets(doj, endYear, salaryCycleStartDay));
 
         const filter = {
             employee:  employeeId,
@@ -488,7 +542,7 @@ export const calculateLeaveBalance = async (employeeId, isPermanentEmp = false, 
         if (!employee) throw new Error('Employee not found');
         const doj = dayjs.utc(employee.doj ?? employee.createdAt);
 
-        const buckets    = buildCLBuckets(doj, year);
+        const buckets    = buildCLBuckets(doj, year, salaryCycleStartDay);
         const yearLeaves = await Leave.find({
             employee:  employeeId,
             leaveType: { $in: ['CASUAL', 'LOP'] },
@@ -626,7 +680,7 @@ export const getCLAllocationDetail = async (employeeId, year) => {
         },
     }).lean();
 
-    const buckets = buildCLBuckets(doj, year);
+    const buckets = buildCLBuckets(doj, year, salaryCycleStartDay);
     // ✅ Pass salaryCycleStartDay
     const allocationRecords = replayLeavesOnBuckets(buckets, yearLeaves, salaryCycleStartDay);
 

@@ -13,6 +13,7 @@ import {
     getUpcomingLeaves,
     getAllLeavesForCalc,
     getCLAllocationDetailController,
+    getBlockedDates,
 } from '../controllers/leaveController.js';
 
 
@@ -27,6 +28,7 @@ router.get('/me', authenticateEmployee, getMyLeaveRequests);
 router.get('/me/:leaveRequestId', authenticateEmployee, getLeaveRequestById);
 router.delete('/me/:leaveRequestId/cancel', authenticateEmployee, cancelLeaveRequest);
 router.get('/upcoming', authenticateEmployee, getUpcomingLeaves);
+router.get('/blocked-dates', authenticateEmployee, getBlockedDates);
 
 // ─── HR/ADMIN: Leave ──────────────────────────────────────────────────────────
 router.get('/', authenticate, authorize(['EMPLOYER_HR', 'EMPLOYER_ADMIN']), getAllLeaveRequests);

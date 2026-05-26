@@ -71,15 +71,36 @@ const cycleStartStrOf = (d, salaryCycleStartDay) => {
     return d.subtract(1, 'month').date(salaryCycleStartDay).startOf('day').format('YYYY-MM-DD');
 };
 
-/** Build CL buckets for a year from DOJ */
-const buildBuckets = (dojDate, year) => {
-    const doj      = dayjs.utc(dojDate);
-    const dojYear  = doj.year();
-    const dojMonth = doj.month();
+/** Returns the mKey of the first salary cycle end month the employee earns */
+const cycleEndKeyOfDOJ = (dojDate, salaryCycleStartDay) => {
+    const d     = dayjs.utc(dojDate);
+    const year  = d.year();
+    const month = d.month();
+    const day   = d.date();
+    if (salaryCycleStartDay === 1) return mKey(year, month);
+    if (day >= salaryCycleStartDay) {
+        const em = (month + 1) % 12;
+        return mKey(em === 0 ? year + 1 : year, em);
+    }
+    return mKey(year, month);
+};
+
+/** Build CL buckets for a year from DOJ — salary-cycle-aware */
+const buildBuckets = (dojDate, year, salaryCycleStartDay = 1) => {
+    const doj     = dayjs.utc(dojDate);
+    const dojYear = doj.year();
+
+    const firstEarnedKey = dojYear > year
+        ? Infinity
+        : dojYear < year
+            ? mKey(year, 0)
+            : cycleEndKeyOfDOJ(dojDate, salaryCycleStartDay);
+
     return Array.from({ length: 12 }, (_, m) => {
-        const earned = (dojYear < year || (dojYear === year && m >= dojMonth)) ? 1 : 0;
-        const ms     = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-01`);
-        return { key: mKey(year, m), month: m, monthName: ms.format('MMMM'), monthShort: ms.format('MMM'), label: ms.format('MMMM YYYY'), earned, used: 0, remaining: earned };
+        const bucketKey = mKey(year, m);
+        const earned    = bucketKey >= firstEarnedKey ? 1 : 0;
+        const ms        = dayjs.utc(`${year}-${String(m + 1).padStart(2, '0')}-01`);
+        return { key: bucketKey, month: m, monthName: ms.format('MMMM'), monthShort: ms.format('MMM'), label: ms.format('MMMM YYYY'), earned, used: 0, remaining: earned };
     });
 };
 
@@ -219,8 +240,8 @@ const recalculateCLAllocations = async (employeeId, year, salaryCycleStartDay, d
     if (leaves.length === 0) return { recalculated: 0, changes: [] };
 
     const maxEndYear = Math.max(...leaves.map(l => dayjs.utc(l.endDate).year()));
-    const allBuckets = buildBuckets(doj, year);
-    if (maxEndYear > year) allBuckets.push(...buildBuckets(doj, maxEndYear));
+    const allBuckets = buildBuckets(doj, year, salaryCycleStartDay);
+    if (maxEndYear > year) allBuckets.push(...buildBuckets(doj, maxEndYear, salaryCycleStartDay));
 
     const newAllocations = [];
 
