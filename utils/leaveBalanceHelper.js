@@ -99,14 +99,43 @@ const cycleAwareMKeyOf = (dateStr, salaryCycleStartDay = 1) => {
     const day   = d.date();
 
     if (day >= salaryCycleStartDay) {
-        // This date is inside a cycle that ends NEXT calendar month
         const endMonth = (month + 1) % 12;
         const endYear  = endMonth === 0 ? year + 1 : year;
         return mKey(endYear, endMonth);
     } else {
-        // This date is inside a cycle that ends THIS calendar month
         return mKey(year, month);
     }
+};
+
+/**
+ * getEligibleBuckets(allBuckets, dayMKey, leaveDateYear)
+ *
+ * Returns sorted eligible CL buckets for a leave day.
+ *
+ * NORMAL (cycleYear === leaveDateYear):
+ *   All available buckets with key ≤ dayMKey — carry-forward FIFO.
+ *   e.g. Feb 15 2027 (cycleYear=2027=leaveDateYear) → can use Jan2027 carry-forward
+ *
+ * CROSS-YEAR (cycleYear > leaveDateYear):
+ *   Leave date is in year Y but cycle belongs to year Y+1 (e.g. Dec 21 → Jan 2027).
+ *   Only use the EXACT cycle bucket (b.key === dayMKey).
+ *   Do NOT allow carry-forward from year Y, and do NOT use other year Y+1 buckets.
+ *   Dec 21 2026 → ONLY Jan 2027 bucket. If Jan 2027 is exhausted → LOP.
+ *   Dec 25 2026 (same Jan 2027 cycle) → same rule: ONLY Jan 2027. If exhausted → LOP.
+ *   Using Feb 2027 would mean borrowing from a future cycle (Jan21-Feb20), which is wrong.
+ */
+const getEligibleBuckets = (allBuckets, dayMKey, leaveDateYear) => {
+    const cycleYear = Math.floor(dayMKey / 12);
+    if (cycleYear > leaveDateYear) {
+        // Cross-year: EXACT cycle bucket only — no carry-forward across year boundary
+        return allBuckets
+            .filter(b => b.earned > 0 && b.remaining > 0 && b.key === dayMKey)
+            .sort((a, b) => a.key - b.key);
+    }
+    // Normal: carry-forward — oldest available bucket up to dayMKey
+    return allBuckets
+        .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
+        .sort((a, b) => a.key - b.key);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,12 +278,12 @@ export const replayLeavesOnBuckets = (buckets, leaves, salaryCycleStartDay = 1) 
         const days = buildDayList(leave);
 
         for (const day of days) {
-            // ✅ FIX: use salary-cycle-aware month key, not raw calendar month
-            const dayMKey = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
+            const dayMKey      = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
+            const leaveDateYear = dayjs.utc(day.date).year();
 
-            const bucket = buckets
-                .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
-                .sort((a, b) => a.key - b.key)[0];
+            // Use cross-year-aware eligibility: Dec21(Jan2027 cycle) → Jan2027 bucket only
+            const eligible = getEligibleBuckets(buckets, dayMKey, leaveDateYear);
+            const bucket   = eligible[0];
 
             if (bucket) {
                 const consume    = Math.min(bucket.remaining, day.weight);
@@ -319,13 +348,35 @@ export const allocateCLForLeave = async ({
         const allBuckets = buildCLBuckets(doj, year, salaryCycleStartDay);
         if (endYear > year) allBuckets.push(...buildCLBuckets(doj, endYear, salaryCycleStartDay));
 
+        // ── Cross-year cycle fix ──────────────────────────────────────────────
+        // A leave date in Dec with salaryCycleStartDay=21 belongs to the Jan NEXT YEAR cycle.
+        // e.g. Dec 21 2026 → cycleKey = Jan 2027.
+        // If we only have 2026 buckets, the FIFO guard (b.key <= Jan2027=24324) matches
+        // ALL 2026 buckets (oldest first = wrong bucket used).
+        // Fix: compute the max cycle-year across all leave days; add that year's buckets.
+        const newLeaveObj = { startDate, endDate, leaveDuration, sandwichDates };
+        const tempDays    = buildDayList(newLeaveObj);
+        const maxCycleYear = Math.max(
+            ...tempDays.map(d => Math.floor(cycleAwareMKeyOf(d.date, salaryCycleStartDay) / 12))
+        );
+        if (maxCycleYear > Math.max(year, endYear)) {
+            allBuckets.push(...buildCLBuckets(doj, maxCycleYear, salaryCycleStartDay));
+        }
+
+        // Also include next-cycle-year in the existing leaves query so FIFO
+        // replay drains those buckets correctly for prior leaves too.
+        // Also include Dec(year-1) cross-cycle leaves for the same reason.
+        const queryEndYear   = Math.max(endYear, maxCycleYear);
+        const queryStartDate = salaryCycleStartDay > 1
+            ? dayjs.utc(`${year - 1}-12-${String(salaryCycleStartDay).padStart(2, '0')}`).toDate()
+            : dayjs.utc(`${year}-01-01`).toDate();
         const filter = {
             employee:  employeeId,
             leaveType: { $in: ['CASUAL', 'LOP'] },
             status:    { $in: ['APPROVED', 'PENDING'] },
             startDate: {
-                $gte: dayjs.utc(`${year}-01-01`).toDate(),
-                $lte: dayjs.utc(`${endYear}-12-31`).endOf('day').toDate(),
+                $gte: queryStartDate,
+                $lte: dayjs.utc(`${queryEndYear}-12-31`).endOf('day').toDate(),
             },
         };
         if (excludeLeaveId) filter._id = { $ne: excludeLeaveId };
@@ -335,20 +386,17 @@ export const allocateCLForLeave = async ({
         // Replay existing with cycle-aware keys
         replayLeavesOnBuckets(allBuckets, existingLeaves, salaryCycleStartDay);
 
-        const newLeaveObj = { startDate, endDate, leaveDuration, sandwichDates };
-        const days        = buildDayList(newLeaveObj);
+        // tempDays already built above — reuse as days
+        const days = tempDays;
 
         let clDays  = 0;
         let lopDays = 0;
         const bucketConsumption = {};
 
         for (const day of days) {
-            // ✅ FIX: cycle-aware upper bound
-            const dayMKey = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
-
-            const bucket = allBuckets
-                .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
-                .sort((a, b) => a.key - b.key)[0];
+            const dayMKey       = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
+            const leaveDateYear = dayjs.utc(day.date).year();
+            const bucket        = getEligibleBuckets(allBuckets, dayMKey, leaveDateYear)[0];
 
             if (bucket) {
                 const consume    = Math.min(bucket.remaining, day.weight);
@@ -543,18 +591,37 @@ export const calculateLeaveBalance = async (employeeId, isPermanentEmp = false, 
         const doj = dayjs.utc(employee.doj ?? employee.createdAt);
 
         const buckets    = buildCLBuckets(doj, year, salaryCycleStartDay);
+
+        // ── Cross-year cycle fix ──────────────────────────────────────────────
+        // Leaves in Dec with startDay=21 belong to the Jan NEXT YEAR cycle.
+        // Add next year's buckets so FIFO replay uses the correct bucket.
+        const nextYearBuckets = buildCLBuckets(doj, year + 1, salaryCycleStartDay);
+        const allBalanceBuckets = [...buckets, ...nextYearBuckets];
+
         const yearLeaves = await Leave.find({
             employee:  employeeId,
             leaveType: { $in: ['CASUAL', 'LOP'] },
             status:    { $in: ['APPROVED', 'PENDING'] },
-            startDate: {
-                $gte: dayjs.utc(`${year}-01-01`).toDate(),
-                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
-            },
+            // Include Dec (year-1) cross-cycle leaves (e.g. Dec21 2026 → Jan 2027 cycle)
+            startDate: salaryCycleStartDay > 1
+                ? {
+                    $gte: dayjs.utc(`${year - 1}-12-${String(salaryCycleStartDay).padStart(2, '0')}`).toDate(),
+                    $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+                  }
+                : {
+                    $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                    $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+                  },
         }).lean();
 
         // ✅ Pass salaryCycleStartDay so replay uses cycle-aware mKeyOf
-        replayLeavesOnBuckets(buckets, yearLeaves, salaryCycleStartDay);
+        // Replay on allBalanceBuckets (includes next year) so Dec21+ leaves
+        // drain the correct Jan-next-year bucket, not an earlier 2026 bucket.
+        replayLeavesOnBuckets(allBalanceBuckets, yearLeaves, salaryCycleStartDay);
+
+        // For the balance display (earnedToDate, usedToDate, availableNow),
+        // only count THIS year's buckets (the 12 in `buckets`).
+        // Next year's buckets are only used internally for correct FIFO replay.
 
         const refDay = ref.date();
         const currentMonth = refDay >= salaryCycleStartDay
@@ -590,12 +657,39 @@ export const calculateLeaveBalance = async (employeeId, isPermanentEmp = false, 
             };
         });
 
-        const lopLeaves    = await Leave.find({
-            employee:  employeeId, leaveType: 'LOP', status: { $in: ['APPROVED', 'PENDING'] },
-            startDate: { $gte: dayjs.utc(`${year}-01-01`).toDate(), $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate() },
+        // ── LOP days — cycle-year aware ───────────────────────────────────────
+        // A LOP leave on Dec 21 2026 (startDay=21) belongs to the Jan 2027 cycle.
+        // It should count toward 2027's LOP total, NOT 2026's.
+        // Filter: only include leaves whose salary cycle year === requested year.
+        const isCycleYearMatch = (leave) => {
+            const cycleKey  = cycleAwareMKeyOf(dayjs.utc(leave.startDate).format('YYYY-MM-DD'), salaryCycleStartDay);
+            const cycleYear = Math.floor(cycleKey / 12);
+            return cycleYear === year;
+        };
+
+        const lopLeaves = await Leave.find({
+            employee:  employeeId,
+            leaveType: 'LOP',
+            status:    { $in: ['APPROVED', 'PENDING'] },
+            // Fetch calendar year + cross-cycle leaves from Dec(year-1)
+            startDate: salaryCycleStartDay > 1
+                ? {
+                    $gte: dayjs.utc(`${year - 1}-12-${String(salaryCycleStartDay).padStart(2, '0')}`).toDate(),
+                    $lte: dayjs.utc(`${year}-12-${String(salaryCycleStartDay - 1).padStart(2, '0')}`).endOf('day').toDate(),
+                  }
+                : {
+                    $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                    $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+                  },
         }).lean();
-        const splitLopDays = yearLeaves.filter(l => l.isSplit).reduce((s, l) => s + (l.lopDays || 0), 0);
-        const lopDaysTotal  = +(lopLeaves.reduce((s, l) => s + l.totalDays, 0) + splitLopDays).toFixed(2);
+
+        // Filter to only leaves whose cycle belongs to this year
+        const lopLeavesThisYear = lopLeaves.filter(isCycleYearMatch);
+        // Split leaves: also filter by cycle year
+        const splitLopDays  = yearLeaves
+            .filter(l => l.isSplit && isCycleYearMatch(l))
+            .reduce((s, l) => s + (l.lopDays || 0), 0);
+        const lopDaysTotal  = +(lopLeavesThisYear.reduce((s, l) => s + l.totalDays, 0) + splitLopDays).toFixed(2);
 
         const cycleStart = refDay >= salaryCycleStartDay
             ? ref.date(salaryCycleStartDay).startOf('day')
@@ -670,19 +764,38 @@ export const getCLAllocationDetail = async (employeeId, year) => {
     const policy              = await LeavePolicy.findOne({ isActive: true }).lean();
     const salaryCycleStartDay = policy?.salaryCycle?.startDay ?? 1;
 
+    // ── Fetch leaves for this year PLUS cross-cycle leaves from prev year ────
+    // When salaryCycleStartDay > 1, dates like Dec 21 belong to the NEXT year's
+    // cycle (Jan next year). If we're querying year=2027, we must also include
+    // Dec 21 2026 leaves so they correctly drain the Jan 2027 bucket.
+    const crossYearStart = salaryCycleStartDay > 1
+        ? dayjs.utc(`${year - 1}-12-${String(salaryCycleStartDay).padStart(2, '0')}`).toDate()
+        : null;
+
     const yearLeaves = await Leave.find({
         employee:  employeeId,
         leaveType: { $in: ['CASUAL', 'LOP'] },
         status:    { $in: ['APPROVED', 'PENDING'] },
-        startDate: {
-            $gte: dayjs.utc(`${year}-01-01`).toDate(),
-            $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
-        },
+        startDate: crossYearStart
+            ? {
+                $gte: crossYearStart,                                        // e.g. 2026-12-21
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+              }
+            : {
+                $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+              },
     }).lean();
 
     const buckets = buildCLBuckets(doj, year, salaryCycleStartDay);
-    // ✅ Pass salaryCycleStartDay
-    const allocationRecords = replayLeavesOnBuckets(buckets, yearLeaves, salaryCycleStartDay);
+
+    // Cross-year cycle fix: Dec 21 (startDay=21) belongs to Jan next year cycle.
+    // Include next year's buckets in alloc buckets so FIFO uses correct bucket.
+    const nextYearBuckets  = buildCLBuckets(doj, year + 1, salaryCycleStartDay);
+    const allDetailBuckets = [...buckets, ...nextYearBuckets];
+
+    // ✅ Replay on allDetailBuckets so Dec21+ leaves drain next-year bucket
+    const allocationRecords = replayLeavesOnBuckets(allDetailBuckets, yearLeaves, salaryCycleStartDay);
 
     // Cycle-aware current month key (matches calculateLeaveBalance exactly)
     const ref    = dayjs.utc();

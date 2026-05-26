@@ -71,6 +71,28 @@ const cycleStartStrOf = (d, salaryCycleStartDay) => {
     return d.subtract(1, 'month').date(salaryCycleStartDay).startOf('day').format('YYYY-MM-DD');
 };
 
+/**
+ * getEligibleBuckets — same cross-year logic as leaveBalanceHelper.js
+ *
+ * NORMAL: oldest available bucket with key ≤ dayMKey (carry-forward FIFO)
+ * CROSS-YEAR: EXACT match only (b.key === dayMKey)
+ *   Dec 21 → only Jan2027 bucket. Dec 25 → only Jan2027 bucket.
+ *   If Jan2027 exhausted → LOP (not Feb2027).
+ */
+const getEligibleBuckets = (allBuckets, dayMKey, leaveDateYear) => {
+    const cycleYear = Math.floor(dayMKey / 12);
+    if (cycleYear > leaveDateYear) {
+        // Cross-year: exact cycle bucket only
+        return allBuckets
+            .filter(b => b.earned > 0 && b.remaining > 0 && b.key === dayMKey)
+            .sort((a, b) => a.key - b.key);
+    }
+    // Normal: carry-forward
+    return allBuckets
+        .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
+        .sort((a, b) => a.key - b.key);
+};
+
 /** Returns the mKey of the first salary cycle end month the employee earns */
 const cycleEndKeyOfDOJ = (dojDate, salaryCycleStartDay) => {
     const d     = dayjs.utc(dojDate);
@@ -136,15 +158,20 @@ dayjs.extend(isSameOrBefore);
 const recalculateSandwich = async (employeeId, year, salaryCycleStartDay, holidaySet) => {
     const isNonWorking = (d) => d.day() === 0 || d.day() === 6 || holidaySet.has(d.format('YYYY-MM-DD'));
 
-    // All active full-day CASUAL leaves for the year, sorted by startDate ASC
+    // All active CASUAL leaves for the year, including Dec(year-1) cross-cycle leaves
     const activeLeaves = await Leave.find({
         employee:  employeeId,
         leaveType: { $in: ['CASUAL', 'LOP'] },
         status:    { $in: ['APPROVED', 'PENDING'] },
-        startDate: {
-            $gte: dayjs.utc(`${year}-01-01`).toDate(),
-            $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
-        },
+        startDate: salaryCycleStartDay > 1
+            ? {
+                $gte: dayjs.utc(`${year - 1}-12-${String(salaryCycleStartDay).padStart(2, '0')}`).toDate(),
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+              }
+            : {
+                $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+              },
     }).sort({ startDate: 1 }).lean();
 
     // Returns array of sandwich date strings for the gap between dayA and dayB,
@@ -226,15 +253,20 @@ const recalculateSandwich = async (employeeId, year, salaryCycleStartDay, holida
 // ─────────────────────────────────────────────────────────────────────────────
 
 const recalculateCLAllocations = async (employeeId, year, salaryCycleStartDay, doj) => {
-    // Re-fetch leaves so we get the fresh totalDays / sandwichDates from Step 1
+    // Re-fetch leaves — include Dec(year-1) cross-cycle leaves (e.g. Dec21 → Jan next year)
     const leaves = await Leave.find({
         employee:  employeeId,
         leaveType: { $in: ['CASUAL', 'LOP'] },
         status:    { $in: ['APPROVED', 'PENDING'] },
-        startDate: {
-            $gte: dayjs.utc(`${year}-01-01`).toDate(),
-            $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
-        },
+        startDate: salaryCycleStartDay > 1
+            ? {
+                $gte: dayjs.utc(`${year - 1}-12-${String(salaryCycleStartDay).padStart(2, '0')}`).toDate(),
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+              }
+            : {
+                $gte: dayjs.utc(`${year}-01-01`).toDate(),
+                $lte: dayjs.utc(`${year}-12-31`).endOf('day').toDate(),
+              },
     }).sort({ appliedAt: 1 }).lean();   // FIFO: appliedAt ASC
 
     if (leaves.length === 0) return { recalculated: 0, changes: [] };
@@ -242,6 +274,20 @@ const recalculateCLAllocations = async (employeeId, year, salaryCycleStartDay, d
     const maxEndYear = Math.max(...leaves.map(l => dayjs.utc(l.endDate).year()));
     const allBuckets = buildBuckets(doj, year, salaryCycleStartDay);
     if (maxEndYear > year) allBuckets.push(...buildBuckets(doj, maxEndYear, salaryCycleStartDay));
+
+    // ── Cross-year cycle fix ──────────────────────────────────────────────────
+    // A leave on Dec 21 (startDay=21) has cycleKey = Jan next year.
+    // Compute the max cycle-year across all leave days and add those buckets.
+    const maxCycleYear = Math.max(
+        ...leaves.flatMap(l => {
+            const days = buildDayList(l);
+            return days.map(d => Math.floor(cycleAwareMKeyOf(d.date, salaryCycleStartDay) / 12));
+        })
+    );
+    const currentMaxYear = Math.max(year, maxEndYear);
+    if (maxCycleYear > currentMaxYear) {
+        allBuckets.push(...buildBuckets(doj, maxCycleYear, salaryCycleStartDay));
+    }
 
     const newAllocations = [];
 
@@ -252,10 +298,9 @@ const recalculateCLAllocations = async (employeeId, year, salaryCycleStartDay, d
         const bucketConsumption = {};
 
         for (const day of days) {
-            const dayMKey = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
-            const bucket  = allBuckets
-                .filter(b => b.earned > 0 && b.remaining > 0 && b.key <= dayMKey)
-                .sort((a, b) => a.key - b.key)[0];
+            const dayMKey       = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
+            const leaveDateYear = dayjs.utc(day.date).year();
+            const bucket        = getEligibleBuckets(allBuckets, dayMKey, leaveDateYear)[0];
 
             if (bucket) {
                 const consume    = Math.min(bucket.remaining, day.weight);
