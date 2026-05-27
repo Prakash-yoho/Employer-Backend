@@ -356,7 +356,7 @@ export const employeeLogin = async (req, res) => {
 // Get employee profile
 export const getEmployeeProfile = async (req, res) => {
     try {
-        const employee = await Employee.findById(req.user._id).select('-officialPassword -createdBy -annualSalary -isPermanentEmp');
+        const employee = await Employee.findById(req.user._id).select('-officialPassword -createdBy -isPermanentEmp');
 
         if (!employee) {
             return res.status(404).json({
