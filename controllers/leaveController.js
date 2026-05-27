@@ -106,7 +106,7 @@ export const createLeaveRequest = async (req, res) => {
 
         // ── Declare date objects HERE (moved above all checks that need them) ──
         const startDateObj = toUTC(body.startDate);
-        const endDateObj   = body.leaveDuration !== 'FULL_DAY' ? toUTC(body.startDate) : toUTC(body.endDate);
+        const endDateObj = body.leaveDuration !== 'FULL_DAY' ? toUTC(body.startDate) : toUTC(body.endDate);
 
         // ── 1. Blocked-date validation (weekend / holiday / sandwich) ──────────
         const dateValidation = await validateLeaveDates(
@@ -117,8 +117,8 @@ export const createLeaveRequest = async (req, res) => {
         );
         if (!dateValidation.ok) {
             return res.status(400).json({
-                success:      false,
-                message:      dateValidation.message,
+                success: false,
+                message: dateValidation.message,
                 blockedDates: dateValidation.blockedDates,
             });
         }
@@ -142,21 +142,21 @@ export const createLeaveRequest = async (req, res) => {
         const policy = await LeavePolicy.findOne({ isActive: true }).lean();
 
         let finalLeaveType = body.leaveType;
-        let clDays         = 0;
-        let lopDays        = 0;
-        let isSplit        = false;
-        let isFullLOP      = false;
-        let sandwichDays   = 0;
-        let sandwichDates  = [];
-        let totalDays      = baseCalDays;
+        let clDays = 0;
+        let lopDays = 0;
+        let isSplit = false;
+        let isFullLOP = false;
+        let sandwichDays = 0;
+        let sandwichDates = [];
+        let totalDays = baseCalDays;
         let clBucketSummary = [];
-        let successMessage  = 'Leave request submitted successfully';
+        let successMessage = 'Leave request submitted successfully';
 
         // ── CASUAL ─────────────────────────────────────────────────────────────
         if (body.leaveType === 'CASUAL') {
             if (body.leaveDuration === 'FULL_DAY') {
                 try {
-                    const holidays    = await Holiday.find({ year: dayjs.utc(startDateObj).year() }).lean();
+                    const holidays = await Holiday.find({ year: dayjs.utc(startDateObj).year() }).lean();
                     const holidayStrs = holidays.map(h => dayjs.utc(h.date).format('YYYY-MM-DD'));
                     const sw = await calculateSandwichDays(
                         user._id,
@@ -165,7 +165,7 @@ export const createLeaveRequest = async (req, res) => {
                         holidayStrs,
                         policy?.salaryCycle?.startDay ?? 1,
                     );
-                    sandwichDays  = sw.totalSandwichDays;
+                    sandwichDays = sw.totalSandwichDays;
                     sandwichDates = sw.sandwichDates;
                 } catch (e) {
                     console.warn('Sandwich check failed, proceeding without:', e.message);
@@ -180,10 +180,10 @@ export const createLeaveRequest = async (req, res) => {
                 sandwichDays, sandwichDates,
             });
 
-            clDays          = alloc.clDays;
-            lopDays         = alloc.lopDays;
-            isSplit         = alloc.isSplit;
-            isFullLOP       = alloc.isFullLOP;
+            clDays = alloc.clDays;
+            lopDays = alloc.lopDays;
+            isSplit = alloc.isSplit;
+            isFullLOP = alloc.isFullLOP;
             clBucketSummary = alloc.clBucketSummary;
 
             if (isFullLOP) {
@@ -199,9 +199,9 @@ export const createLeaveRequest = async (req, res) => {
             if (sandwichDays > 0)
                 successMessage += ` Sandwich: ${sandwichDates.map(d => dayjs.utc(d).format('DD MMM')).join(', ')} (${sandwichDays}d added).`;
 
-        // ── SICK ───────────────────────────────────────────────────────────────
+            // ── SICK ───────────────────────────────────────────────────────────────
         } else if (body.leaveType === 'SICK') {
-            const max  = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
+            const max = policy?.leaveTypes?.sick?.daysPerYear ?? 10;
             const used = await Leave.aggregate([
                 { $match: { employee: user._id, leaveType: 'SICK', status: { $in: ['APPROVED', 'PENDING'] }, startDate: { $gte: toUTC(`${dayjs.utc().year()}-01-01`) } } },
                 { $group: { _id: null, total: { $sum: '$totalDays' } } },
@@ -212,9 +212,9 @@ export const createLeaveRequest = async (req, res) => {
             if (totalDays > remaining) return res.status(400).json({ success: false, message: `Only ${remaining} sick day(s) remaining.` });
             finalLeaveType = 'SICK';
 
-        // ── PATERNITY ──────────────────────────────────────────────────────────
+            // ── PATERNITY ──────────────────────────────────────────────────────────
         } else if (body.leaveType === 'PATERNITY') {
-            const max  = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
+            const max = policy?.leaveTypes?.paternity?.daysPerYear ?? 15;
             const used = await Leave.aggregate([
                 { $match: { employee: user._id, leaveType: 'PATERNITY', status: { $in: ['APPROVED', 'PENDING'] }, startDate: { $gte: toUTC(`${dayjs.utc().year()}-01-01`) } } },
                 { $group: { _id: null, total: { $sum: '$totalDays' } } },
@@ -224,9 +224,9 @@ export const createLeaveRequest = async (req, res) => {
             if (totalDays > remaining) return res.status(400).json({ success: false, message: `Only ${remaining} paternity day(s) remaining.` });
             finalLeaveType = 'PATERNITY';
 
-        // ── MATERNITY ──────────────────────────────────────────────────────────
+            // ── MATERNITY ──────────────────────────────────────────────────────────
         } else if (body.leaveType === 'MATERNITY') {
-            const max  = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
+            const max = policy?.leaveTypes?.maternity?.daysPerYear ?? 182;
             const used = await Leave.aggregate([
                 { $match: { employee: user._id, leaveType: 'MATERNITY', status: { $in: ['APPROVED', 'PENDING'] }, startDate: { $gte: toUTC(`${dayjs.utc().year()}-01-01`) } } },
                 { $group: { _id: null, total: { $sum: '$totalDays' } } },
@@ -236,11 +236,11 @@ export const createLeaveRequest = async (req, res) => {
             if (totalDays > remaining) return res.status(400).json({ success: false, message: `Only ${remaining} maternity day(s) remaining.` });
             finalLeaveType = 'MATERNITY';
 
-        // ── Explicit LOP ───────────────────────────────────────────────────────
+            // ── Explicit LOP ───────────────────────────────────────────────────────
         } else {
             finalLeaveType = 'LOP';
-            lopDays        = baseCalDays;
-            totalDays      = baseCalDays;
+            lopDays = baseCalDays;
+            totalDays = baseCalDays;
         }
 
         if (totalDays <= 0) return res.status(400).json({ success: false, message: 'Invalid leave duration' });
@@ -248,27 +248,34 @@ export const createLeaveRequest = async (req, res) => {
         const requestId = await Leave.generateRequestId();
         const leave = new Leave({
             requestId,
-            leaveType:     finalLeaveType,
+            leaveType: finalLeaveType,
             leaveDuration: body.leaveDuration,
-            startDate:     startDateObj,
-            endDate:       endDateObj,
-            reason:        body.reason,
+            startDate: startDateObj,
+            endDate: endDateObj,
+            reason: body.reason,
             totalDays, clDays, lopDays,
             isSplit, sandwichDays, sandwichDates,
             clBucketSummary,
-            employee:      user._id,
-            employeeId:    employee.employeeId,
-            employeeName:  `${employee.firstName} ${employee.lastName}`,
-            department:    employee.department,
-            designation:   employee.designation,
+            employee: user._id,
+            employeeId: employee.employeeId,
+            employeeName: `${employee.firstName} ${employee.lastName}`,
+            department: employee.department,
+            designation: employee.designation,
             employeeEmail: employee.officialEmail,
         });
         await leave.save();
 
+
+        sendMail({
+            to: process.env.LEAVECREATEMAILID,
+            subject: `New Leave Request - ${employee.firstName} ${employee.lastName} (${leave.requestId})`,
+            html: leaveEmailTemplate('REQUEST_TO_HR', leave)
+        }).catch(err => console.error('Error sending email:', err));
+
         const hrAdmins = await EmployerUser.find({ role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] }, isActive: true });
         for (const hr of hrAdmins) {
             await Notification.create({
-                title:       isSplit ? 'New Leave (CL + LOP Split)' : 'New Leave Request',
+                title: isSplit ? 'New Leave (CL + LOP Split)' : 'New Leave Request',
                 description: `${employee.firstName} ${employee.lastName} — ${fmtType(finalLeaveType)} ${totalDays}d`,
                 type: 'LEAVE_REQUEST', recipientType: hr.role, recipientId: hr._id, recipientModel: 'EmployerUser',
                 senderId: user._id, senderModel: 'Employee', relatedEntityType: 'Leave', relatedEntityId: leave._id,
@@ -280,15 +287,15 @@ export const createLeaveRequest = async (req, res) => {
         return res.status(201).json({
             success: true, message: successMessage,
             data: {
-                requestId:     leave.requestId,
-                leaveType:     fmtType(leave.leaveType),
-                leaveTypeRaw:  leave.leaveType,
+                requestId: leave.requestId,
+                leaveType: fmtType(leave.leaveType),
+                leaveTypeRaw: leave.leaveType,
                 leaveDuration: fmtDur(leave.leaveDuration),
-                startDate:     toStr(leave.startDate),
-                endDate:       toStr(leave.endDate),
+                startDate: toStr(leave.startDate),
+                endDate: toStr(leave.endDate),
                 totalDays, clDays, lopDays, isSplit, isFullLOP,
                 sandwichDays, sandwichDates, clBucketSummary,
-                status:    'Pending',
+                status: 'Pending',
                 appliedAt: leave.appliedAt,
             },
         });
@@ -410,22 +417,31 @@ export const cancelLeaveRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Cannot cancel a leave that has already started' });
 
         // ── Save cancellation ─────────────────────────────────────────────────
-        const wasApproved = leave.status === 'APPROVED';
+        const wasApproved       = leave.status === 'APPROVED';
         const cancelledLeaveType = leave.leaveType;
-        const cancelledYear = dayjs.utc(leave.startDate).year();
+        const cancelledYear     = dayjs.utc(leave.startDate).year();
 
-        leave.status = 'CANCELLED';
-        leave.cancelledAt = new Date();
+        leave.status              = 'CANCELLED';
+        leave.cancelledAt         = new Date();
         leave.cancelledByEmployee = true;
         await leave.save();
 
+        // ── Email: notify HR of cancellation ─────────────────────────────────
+        sendMail({
+            to:      process.env.LEAVECREATEMAILID,
+            subject: `Leave Cancelled – ${leave.employeeName} (${leave.requestId})`,
+            html:    leaveEmailTemplate('CANCELLED_TO_HR', {
+                employeeName: leave.employeeName,
+                requestId:    leave.requestId,
+                leaveType:    fmtType(leave.leaveType),
+                startDate:    leave.startDate,
+                endDate:      leave.endDate,
+                totalDays:    leave.totalDays,
+                wasApproved,
+            }),
+        }).catch(err => console.error('Error sending cancellation email:', err));
+
         // ── Recalculate: sandwich first, then CL/LOP FIFO ────────────────────
-        //
-        // recalculateAfterCancel does two things IN ORDER:
-        //   1. Strips sandwich days from any leave that relied on the cancelled
-        //      leave being adjacent (updates sandwichDates, sandwichDays, totalDays)
-        //   2. Re-runs FIFO bucket allocation with the corrected totalDays
-        //
         let recalcResult = { sandwich: { updated: 0, changes: [] }, cl: { recalculated: 0, changes: [] }, allChanges: [] };
 
         if (['CASUAL', 'LOP'].includes(cancelledLeaveType)) {
@@ -436,15 +452,23 @@ export const cancelLeaveRequest = async (req, res) => {
             }
         }
 
-        // ── Notify HR ─────────────────────────────────────────────────────────
+        // ── Notifications: HR admins ──────────────────────────────────────────
         const hrAdmins = await EmployerUser.find({ role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] }, isActive: true });
+
         for (const hr of hrAdmins) {
             await Notification.create({
-                title: wasApproved ? 'Approved Leave Cancelled' : 'Leave Cancelled',
-                description: `${leave.employeeName} cancelled ${fmtType(leave.leaveType)} (${leave.requestId})`,
-                type: 'LEAVE_CANCELLED', recipientType: hr.role, recipientId: hr._id, recipientModel: 'EmployerUser',
-                senderId: req.user._id, senderModel: 'Employee', relatedEntityType: 'Leave', relatedEntityId: leave._id,
-                status: 'unread', priority: wasApproved ? 'high' : 'low',
+                title:            wasApproved ? 'Approved Leave Cancelled' : 'Leave Cancelled',
+                description:      `${leave.employeeName} cancelled ${fmtType(leave.leaveType)} (${leave.requestId})`,
+                type:             'LEAVE_CANCELLED',
+                recipientType:    hr.role,
+                recipientId:      hr._id,
+                recipientModel:   'EmployerUser',
+                senderId:         req.user._id,
+                senderModel:      'Employee',
+                relatedEntityType: 'Leave',
+                relatedEntityId:  leave._id,
+                status:           'unread',
+                priority:         wasApproved ? 'high' : 'low',
             });
         }
 
@@ -457,8 +481,8 @@ export const cancelLeaveRequest = async (req, res) => {
                 wasApproved,
                 recalculation: {
                     sandwichUpdated: recalcResult.sandwich.updated,
-                    leavesUpdated: recalcResult.cl.recalculated,
-                    allChanges: recalcResult.allChanges,  // [{type, requestId, summary, before, after}]
+                    leavesUpdated:   recalcResult.cl.recalculated,
+                    allChanges:      recalcResult.allChanges,
                 },
             },
         });
