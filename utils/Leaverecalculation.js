@@ -187,6 +187,16 @@ const recalculateSandwich = async (employeeId, year, salaryCycleStartDay, holida
         return gap.map(d => d.format('YYYY-MM-DD'));
     };
 
+    // Build a set of all sandwich dates already owned by other leaves
+    // so we never double-assign the same gap to two different leaves.
+    const ownedSandwichDates = new Map(); // date → owning leave _id
+    for (const l of activeLeaves) {
+        for (const sd of (l.sandwichDates ?? [])) {
+            const sdStr = dayjs.utc(sd).format('YYYY-MM-DD');
+            ownedSandwichDates.set(sdStr, l._id.toString());
+        }
+    }
+
     const changes = [];
     let   updated = 0;
 
@@ -214,12 +224,32 @@ const recalculateSandwich = async (employeeId, year, salaryCycleStartDay, holida
                       && dayjs.utc(l.startDate).startOf('day').isAfter(leaveEnd))
             .sort((a, b) => dayjs.utc(a.startDate).valueOf() - dayjs.utc(b.startDate).valueOf())[0];
 
-        // Compute fresh sandwich dates
+        // Compute fresh sandwich dates.
+        // Rule: the gap between two adjacent leaves belongs to the EARLIER leave
+        // (assigned as its nextLeave gap). The LATER leave never claims the same gap
+        // as its prevLeave gap — doing so would double-count the same days.
+        // So: only assign prevLeave gap if those dates are NOT already owned by prevLeave.
         const fresh = [];
-        if (prevLeave) checkGap(dayjs.utc(prevLeave.endDate).startOf('day'), leaveStart)
-            .forEach(d => { if (!fresh.includes(d)) fresh.push(d); });
-        if (nextLeave) checkGap(leaveEnd, dayjs.utc(nextLeave.startDate).startOf('day'))
-            .forEach(d => { if (!fresh.includes(d)) fresh.push(d); });
+        if (prevLeave) {
+            const prevId = prevLeave._id.toString();
+            checkGap(dayjs.utc(prevLeave.endDate).startOf('day'), leaveStart)
+                .forEach(d => {
+                    const owner = ownedSandwichDates.get(d);
+                    // Skip if prevLeave owns it (it assigned the gap from its nextLeave side)
+                    if (owner === prevId) return;
+                    if ((!owner || owner === selfId) && !fresh.includes(d)) fresh.push(d);
+                });
+        }
+        if (nextLeave) {
+            checkGap(leaveEnd, dayjs.utc(nextLeave.startDate).startOf('day'))
+                .forEach(d => {
+                    const owner = ownedSandwichDates.get(d);
+                    const nextId = nextLeave._id.toString();
+                    // Skip if nextLeave owns it
+                    if (owner === nextId) return;
+                    if ((!owner || owner === selfId) && !fresh.includes(d)) fresh.push(d);
+                });
+        }
 
         const newSandwichDates = fresh.sort();
         const oldSandwichDates = (leave.sandwichDates ?? [])
@@ -238,6 +268,16 @@ const recalculateSandwich = async (employeeId, year, salaryCycleStartDay, holida
                 totalDays:     newTotalDays,
             },
         });
+
+        // Update the ownership map so subsequent leaves in this loop see the
+        // correct state. Dates the current leave no longer owns are freed;
+        // dates it newly owns are claimed.
+        for (const [date, owner] of ownedSandwichDates.entries()) {
+            if (owner === selfId) ownedSandwichDates.delete(date);
+        }
+        for (const d of newSandwichDates) {
+            ownedSandwichDates.set(d, selfId);
+        }
 
         changes.push({
             requestId: leave.requestId,

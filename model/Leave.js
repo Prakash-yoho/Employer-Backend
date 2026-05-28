@@ -53,43 +53,15 @@ const leaveSchema = new Schema({
             }
         ]
     },
-    totalDays: {
-        type: Number,
-        required: true,
-        min: 0.5,
-        max: 365
-    },
-    sandwichDays: {
-        type: Number,
-        default: 0,
-        min: 0
-    },
-    sandwichDates: {
-        type: [String],
-        default: []
-    },
-
-    clDays: {
-        type: Number,
-        default: 0,
-        min: 0
-    },
-    lopDays: {
-        type: Number,
-        default: 0,
-        min: 0
-    },
-    isSplit: {
-        type: Boolean,
-        default: false
-    },
-    splitNote: {
-        type: String,
-        default: null
-    },
+    totalDays: { type: Number, required: true, min: 0.5, max: 365 },
+    sandwichDays: { type: Number, default: 0, min: 0 },
+    sandwichDates: { type: [String], default: [] },
+    clDays: { type: Number, default: 0, min: 0 },
+    lopDays: { type: Number, default: 0, min: 0 },
+    isSplit: { type: Boolean, default: false },
+    splitNote: { type: String, default: null },
     reason: { type: String, required: true, trim: true, minlength: 10, maxlength: 500 },
 
-    // For LOP or maternity/paternity — HR-approved special leave
     isSpecialLeave: { type: Boolean, default: false },
     specialLeaveNote: { type: String, default: null },
 
@@ -119,37 +91,62 @@ const leaveSchema = new Schema({
     updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
+// ── Pre-save: compute totalDays ───────────────────────────────────────────────
 leaveSchema.pre('save', function () {
     if (this.startDate && this.endDate) {
         const diffTime = Math.abs(new Date(this.endDate) - new Date(this.startDate));
         let diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
         if (this.leaveDuration !== 'FULL_DAY') diffDays = 0.5;
-        // Add sandwich days on top of calendar diff
         this.totalDays = diffDays + (this.sandwichDays || 0);
     }
 });
 
+// ── generateRequestId — ATOMIC ────────────────────────────────────────────────
+//
+// OLD (race condition under concurrent load):
+//   findOne({ sort: createdAt: -1 }) — two simultaneous requests both read
+//   "LR-035" as the last ID, both compute "LR-036" → E11000 duplicate key.
+//
+// NEW (atomic — safe for 300+ concurrent employees):
+//   findOneAndUpdate with $inc reads AND increments the counter in a single
+//   MongoDB operation. MongoDB's document-level locking guarantees each
+//   caller gets a unique seq value, even under extreme concurrency.
+//
 leaveSchema.statics.generateRequestId = async function () {
-    const last = await this.findOne({}, { requestId: 1 }, { sort: { createdAt: -1 } }).lean();
-    let num = 1;
-    if (last?.requestId) {
-        const match = last.requestId.match(/LR-(\d+)/);
-        if (match) num = parseInt(match[1]) + 1;
+    // Retrieve Counter lazily — by the time this method is called at runtime,
+    // Task.js has already registered Counter at startup.
+    const Counter = mongoose.model('Counter');
+    const MAX_RETRIES = 5;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        const counter = await Counter.findOneAndUpdate(
+            { _id: 'leaveRequestId' },
+            { $inc: { seq: 1 } },
+            { new: true, upsert: true }
+        );
+        const candidate = `LR-${String(counter.seq).padStart(3, '0')}`;
+
+        // Guard: if this ID already exists (counter was behind), loop to get next
+        const exists = await this.findOne({ requestId: candidate }).lean();
+        if (!exists) return candidate;
+
+        if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 50 * attempt));
     }
-    return `LR-${num.toString().padStart(3, '0')}`;
+    throw new Error('Failed to generate unique requestId after max retries');
 };
 
+// ── checkOverlap ──────────────────────────────────────────────────────────────
 leaveSchema.statics.checkOverlap = async function (employeeId, startDate, endDate, leaveDuration) {
     const start = new Date(startDate); start.setHours(0, 0, 0, 0);
     const end = new Date(endDate); end.setHours(23, 59, 59, 999);
     const query = {
         employee: employeeId,
-        status: { $in: ['PENDING', 'APPROVED'] }
+        status: { $in: ['PENDING', 'APPROVED'] },
     };
     if (leaveDuration !== 'FULL_DAY') {
         query.$or = [
             { startDate: { $lte: end }, endDate: { $gte: start }, leaveDuration: 'FULL_DAY' },
-            { startDate: { $lte: end }, endDate: { $gte: start }, leaveDuration: leaveDuration }
+            { startDate: { $lte: end }, endDate: { $gte: start }, leaveDuration: leaveDuration },
         ];
     } else {
         query.$or = [{ startDate: { $lte: end }, endDate: { $gte: start } }];
@@ -157,6 +154,7 @@ leaveSchema.statics.checkOverlap = async function (employeeId, startDate, endDat
     return await this.findOne(query);
 };
 
+// ── approve / reject ──────────────────────────────────────────────────────────
 leaveSchema.methods.approve = async function (approvedBy, comments = '') {
     this.status = 'APPROVED';
     this.approvedBy = approvedBy;
@@ -181,6 +179,7 @@ leaveSchema.methods.reject = async function (rejectedBy, comments = '') {
     return await this.save();
 };
 
+// ── Indexes ───────────────────────────────────────────────────────────────────
 leaveSchema.index({ employee: 1, status: 1 });
 leaveSchema.index({ status: 1 });
 leaveSchema.index({ startDate: 1, endDate: 1 });
