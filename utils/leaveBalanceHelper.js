@@ -283,19 +283,27 @@ export const replayLeavesOnBuckets = (buckets, leaves, salaryCycleStartDay = 1) 
 
             // Use cross-year-aware eligibility: Dec21(Jan2027 cycle) → Jan2027 bucket only
             const eligible = getEligibleBuckets(buckets, dayMKey, leaveDateYear);
-            const bucket   = eligible[0];
 
-            if (bucket) {
-                const consume    = Math.min(bucket.remaining, day.weight);
+            // Drain buckets in order (oldest first) until day.weight is fully covered
+            // or all eligible buckets are exhausted. A single leave day may span two
+            // buckets when the first bucket is only partially available (e.g. June has
+            // 0.5d left and the day needs 1d → take 0.5 from June, 0.5 from July).
+            let remaining = day.weight;
+
+            for (const bucket of eligible) {
+                if (remaining <= 0) break;
+                const consume    = +Math.min(bucket.remaining, remaining).toFixed(2);
+                if (consume <= 0) continue;
                 bucket.used      = +(bucket.used      + consume).toFixed(2);
                 bucket.remaining = +(bucket.remaining - consume).toFixed(2);
+                remaining        = +(remaining        - consume).toFixed(2);
 
                 allocationRecords.push({
                     leaveId:       leave._id?.toString(),
                     requestId:     leave.requestId,
                     appliedAt:     leave.appliedAt,
                     leaveDate:     day.date,
-                    weight:        day.weight,
+                    weight:        consume,
                     isSandwich:    day.isSandwich,
                     isLOP:         false,
                     clBucketKey:   bucket.key,
@@ -303,22 +311,23 @@ export const replayLeavesOnBuckets = (buckets, leaves, salaryCycleStartDay = 1) 
                     clBucketLabel: bucket.label,
                     consume,
                 });
+            }
 
-                const lopPart = +(day.weight - consume).toFixed(2);
-                if (lopPart > 0) {
-                    allocationRecords.push({
-                        leaveId: leave._id?.toString(), requestId: leave.requestId,
-                        appliedAt: leave.appliedAt, leaveDate: day.date,
-                        weight: lopPart, isSandwich: day.isSandwich,
-                        isLOP: true, clBucketKey: null, clBucketMonth: null, clBucketLabel: null, consume: lopPart,
-                    });
-                }
-            } else {
+            // Any portion still remaining after all eligible buckets → LOP
+            const lopPart = +remaining.toFixed(2);
+            if (lopPart > 0) {
                 allocationRecords.push({
-                    leaveId: leave._id?.toString(), requestId: leave.requestId,
-                    appliedAt: leave.appliedAt, leaveDate: day.date,
-                    weight: day.weight, isSandwich: day.isSandwich,
-                    isLOP: true, clBucketKey: null, clBucketMonth: null, clBucketLabel: null, consume: day.weight,
+                    leaveId:       leave._id?.toString(),
+                    requestId:     leave.requestId,
+                    appliedAt:     leave.appliedAt,
+                    leaveDate:     day.date,
+                    weight:        lopPart,
+                    isSandwich:    day.isSandwich,
+                    isLOP:         true,
+                    clBucketKey:   null,
+                    clBucketMonth: null,
+                    clBucketLabel: null,
+                    consume:       lopPart,
                 });
             }
         }
@@ -396,24 +405,27 @@ export const allocateCLForLeave = async ({
         for (const day of days) {
             const dayMKey       = cycleAwareMKeyOf(day.date, salaryCycleStartDay);
             const leaveDateYear = dayjs.utc(day.date).year();
-            const bucket        = getEligibleBuckets(allBuckets, dayMKey, leaveDateYear)[0];
+            const eligible      = getEligibleBuckets(allBuckets, dayMKey, leaveDateYear);
 
-            if (bucket) {
-                const consume    = Math.min(bucket.remaining, day.weight);
+            // Drain buckets oldest-first until day.weight is fully covered
+            let remaining = day.weight;
+            for (const bucket of eligible) {
+                if (remaining <= 0) break;
+                const consume    = +Math.min(bucket.remaining, remaining).toFixed(2);
+                if (consume <= 0) continue;
                 bucket.used      = +(bucket.used      + consume).toFixed(2);
                 bucket.remaining = +(bucket.remaining - consume).toFixed(2);
                 clDays          += consume;
+                remaining        = +(remaining        - consume).toFixed(2);
 
                 if (!bucketConsumption[bucket.key]) {
                     bucketConsumption[bucket.key] = { key: bucket.key, label: bucket.label, monthName: bucket.monthName, days: 0 };
                 }
                 bucketConsumption[bucket.key].days = +(bucketConsumption[bucket.key].days + consume).toFixed(2);
-
-                const lopPart = +(day.weight - consume).toFixed(2);
-                if (lopPart > 0) lopDays += lopPart;
-            } else {
-                lopDays += day.weight;
             }
+
+            const lopPart = +remaining.toFixed(2);
+            if (lopPart > 0) lopDays += lopPart;
         }
 
         clDays  = +clDays.toFixed(2);
@@ -500,11 +512,17 @@ export const calculateSandwichDays = async (
         return gap.map(d => d.format('YYYY-MM-DD'));
     };
 
+    // Only FULL_DAY leaves can anchor a sandwich.
+    // Half-day leaves (FIRST_HALF / SECOND_HALF) must be excluded because the
+    // employee is partially present on that day — the non-working days between a
+    // half-day leave and the new leave should NOT be counted as sandwich days.
     const prevLeave = existingLeaves
-        .filter(l => dayjs.utc(l.endDate).startOf('day').isBefore(newStart))
+        .filter(l => l.leaveDuration === 'FULL_DAY'
+                  && dayjs.utc(l.endDate).startOf('day').isBefore(newStart))
         .sort((a, b) => dayjs.utc(b.endDate).valueOf() - dayjs.utc(a.endDate).valueOf())[0];
     const nextLeave = existingLeaves
-        .filter(l => dayjs.utc(l.startDate).startOf('day').isAfter(newEnd))
+        .filter(l => l.leaveDuration === 'FULL_DAY'
+                  && dayjs.utc(l.startDate).startOf('day').isAfter(newEnd))
         .sort((a, b) => dayjs.utc(a.startDate).valueOf() - dayjs.utc(b.startDate).valueOf())[0];
 
     const sandwichDates = [];
