@@ -168,6 +168,7 @@ export const employerUserLogin = async (req, res) => {
                 message: 'Invalid email or password'
             });
         }
+        if (employerUser?.isActive === false) res.status(403).json({success:false, message:"Access Denied - Inactive Profile contact admin"})
 
         if (employerUser?.role.includes("EMPLOYER_ADMIN")) res.status(403).json({ success: false, message: "Access denied. Employer HR access only." })
 
