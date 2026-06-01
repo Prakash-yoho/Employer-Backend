@@ -7,7 +7,7 @@ import {
     getLeavePolicy,
     updateLeavePolicy,
     deleteLeavePolicy,
-} from '../controllers/leavePolicyController.js';
+} from '../controllers/Leavepolicycontroller.js';
 
 
 
