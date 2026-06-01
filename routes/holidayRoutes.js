@@ -8,7 +8,7 @@ import {
     getHolidays,
     updateHoliday,
     deleteHoliday,
-} from '../controllers/holidayController.js';
+} from '../controllers/Holidaycontroller.js';
 
 const router = express.Router();
 
