@@ -26,8 +26,8 @@ import {
 } from '../validations/leaveValidation.js';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
-import { recalculateAfterCancel } from '../utils/leaveRecalculation.js';
-import { getBlockedDatesForEmployee, validateLeaveDates } from '../utils/Leavevalidationhelper,.js';
+import { recalculateAfterCancel } from '../utils/Leaverecalculation.js';
+import { getBlockedDatesForEmployee, validateLeaveDates } from '../utils/Leavevalidationhelper.js';
 dayjs.extend(utc);
 
 // ─── Shared utilities (also used by permissionController) ─────────────────────
