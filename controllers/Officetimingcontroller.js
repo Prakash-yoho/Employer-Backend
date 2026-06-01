@@ -1,4 +1,4 @@
-import OfficeTiming from "../model/OfficeTiming.js";
+import OfficeTiming from "../model/Officetiming.js";
 import Attendance from "../model/Attendance.js";
 import Employee from "../model/Employee.js";
 

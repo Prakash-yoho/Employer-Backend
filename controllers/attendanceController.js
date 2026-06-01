@@ -5,7 +5,7 @@ import { s3 } from '../config/s3.js';
 import { v4 as uuidv4 } from "uuid";
 import Employee from '../model/Employee.js';
 import Holiday from "../model/Holiday.js";
-import OfficeTiming from "../model/OfficeTiming.js";
+import OfficeTiming from "../model/Officetiming.js";
 import BreakPolicy from "../model/BreakPolicy.js";
 import { hhmmToMinutes, timeStrToMinutes } from "./officeTimingController.js";
 import dayjs from "dayjs";
