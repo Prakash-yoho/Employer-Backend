@@ -7,7 +7,7 @@ import Employee from '../model/Employee.js';
 import Holiday from "../model/Holiday.js";
 import OfficeTiming from "../model/Officetiming.js";
 import BreakPolicy from "../model/BreakPolicy.js";
-import { hhmmToMinutes, timeStrToMinutes } from "./officeTimingController.js";
+import { hhmmToMinutes, timeStrToMinutes } from "./Officetimingcontroller.js";
 import dayjs from "dayjs";
 
 const bucketName = process.env.AWS_S3_BUCKET;
