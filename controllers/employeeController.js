@@ -1818,7 +1818,7 @@ export const getResignedEmployees = async (req, res) => {
         }
 
         const employees = await Employee.find({ isActive: false })
-            .select('firstName lastName officialEmail employeeId designation department createdAt relievingDate resignationDate relievingLetter experienceCertificate isActive')
+            .select('firstName lastName officialEmail employeeId designation doj department createdAt relievingDate resignationDate relievingLetter experienceCertificate isActive')
             .sort({ updatedAt: -1 });
 
         return res.status(200).json({
