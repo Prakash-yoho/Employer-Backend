@@ -94,7 +94,8 @@ export const getViolationsReport = async (req, res) => {
     const { month, year, date } = req.query;
 
     const timing = await getTiming();
-    const cutoffMins = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
+    const startTimeMins = hhmmToMinutes(timing.startTime);
+    const cutoffMins = startTimeMins + timing.graceMinutes;
     const endTimeMins = hhmmToMinutes(timing.endTime);
 
     // Today's date string – used to exclude still-active sessions
@@ -183,7 +184,7 @@ export const getViolationsReport = async (req, res) => {
         // Late login
         isLate,
         lateByMinutes: isLate
-          ? Math.round(clockInMins - cutoffMins)
+          ? Math.round(clockInMins - startTimeMins)  // from start, not grace cutoff
           : null,
 
         // Early logout

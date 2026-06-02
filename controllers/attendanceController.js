@@ -83,11 +83,13 @@ export const clockIn = async (req, res) => {
 
     // ── Office timing check ──────────────────────────────────────────────────
     const timing = await getOfficeTiming();
-    const cutoffMins = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
+    const startTimeMins = hhmmToMinutes(timing.startTime);
+    const cutoffMins = startTimeMins + timing.graceMinutes;
     const clockInMin = timeStrToMinutes(time);
 
     const lateLogin = clockInMin != null && clockInMin > cutoffMins;
-    const lateByMinutes = lateLogin ? Math.round(clockInMin - cutoffMins) : null;
+    // Late minutes counted from actual start time, not from grace cutoff
+    const lateByMinutes = lateLogin ? Math.round(clockInMin - startTimeMins) : null;
 
     const [clockInImage, clockInLocation] = await Promise.all([
       uploadImage(image, "clock-in"),
@@ -160,17 +162,17 @@ export const startBreak = async (req, res) => {
       }
     }
 
-    const startImage    = await uploadImage(image, "break-start");
+    const startImage = await uploadImage(image, "break-start");
     const startLocation = parseLocation(location);
 
     attendance.breaks.push({
-      start:          time,
-      end:            null,
+      start: time,
+      end: null,
       startImage,
       startLocation,
       breakType,
       allowedMinutes: slot?.allowedMinutes ?? null,
-      overByMinutes:  null,
+      overByMinutes: null,
       isBreakViolation: false,
     });
 
@@ -202,21 +204,21 @@ export const endBreak = async (req, res) => {
     if (!lastBreak || lastBreak.end)
       return res.status(404).json({ error: "No active break to end" });
 
-    const endImage    = await uploadImage(image, "break-end");
+    const endImage = await uploadImage(image, "break-end");
     const endLocation = parseLocation(location);
 
     // ── Compute duration & violation ─────────────────────────────────────────
     const durationMins = calcDurationMinutes(lastBreak.start, time);
-    const allowed      = lastBreak.allowedMinutes;
+    const allowed = lastBreak.allowedMinutes;
     const overByMinutes =
       allowed != null && durationMins != null && durationMins > allowed
         ? Math.round(durationMins - allowed)
         : null;
 
-    lastBreak.end              = time;
-    lastBreak.endImage         = endImage;
-    lastBreak.endLocation      = endLocation;
-    lastBreak.overByMinutes    = overByMinutes;
+    lastBreak.end = time;
+    lastBreak.endImage = endImage;
+    lastBreak.endLocation = endLocation;
+    lastBreak.overByMinutes = overByMinutes;
     lastBreak.isBreakViolation = overByMinutes != null && overByMinutes > 0;
 
     attendance.markModified("breaks");
@@ -225,11 +227,11 @@ export const endBreak = async (req, res) => {
     return res.json({
       ...attendance.toObject(),
       _breakFeedback: {
-        breakType:    lastBreak.breakType,
+        breakType: lastBreak.breakType,
         durationMins,
         allowedMinutes: allowed,
         overByMinutes,
-        isViolation:  lastBreak.isBreakViolation,
+        isViolation: lastBreak.isBreakViolation,
       },
     });
   } catch (err) {
@@ -1179,7 +1181,7 @@ export const getAttendanceSummary = async (req, res) => {
     const completed = todayLogs.filter((l) => l.clockIn && l.clockOut).length;
     const active = todayLogs.filter((l) => l.clockIn && !l.clockOut).length;
     const onBreak = todayLogs.filter((l) => l.breaks?.some((b) => b.start && !b.end)).length;
-    const late = todayLogs.filter((l) => l.lateLogin === true).length; 
+    const late = todayLogs.filter((l) => l.lateLogin === true).length;
 
     return res.status(200).json({
       success: true,
