@@ -8,6 +8,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
+import { getS3ServerDate } from "../config/s3.js";
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -55,7 +56,11 @@ export const getPresignedUrl = async (key, expiresIn = 3600) => {
     Bucket: process.env.AWS_S3_BUCKET,
     Key:    key,
   });
-  return getSignedUrl(s3, command, { expiresIn });
+
+  // 🔑 Sign with S3's clock, not the server's local clock
+  const signingDate = await getS3ServerDate();
+
+  return getSignedUrl(s3, command, { expiresIn, signingDate });
 };
 
 // Generate presigned URL for download (forces download via Content-Disposition)
@@ -65,5 +70,9 @@ export const getPresignedDownloadUrl = async (key, filename, expiresIn = 3600) =
     Key:                        key,
     ResponseContentDisposition: `attachment; filename="${filename}"`,
   });
-  return getSignedUrl(s3, command, { expiresIn });
+
+  // 🔑 Sign with S3's clock, not the server's local clock
+  const signingDate = await getS3ServerDate();
+
+  return getSignedUrl(s3, command, { expiresIn, signingDate });
 };

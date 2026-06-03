@@ -5,7 +5,7 @@ import { addExperienceCompanySchema, getDocumentsQuerySchema, uploadDocumentSche
 import { deleteDocumentFromS3, uploadDocumentToS3 } from '../utils/saveOfferLetterInS3.js';
 import EmployerUser from '../model/EmployerUser.js';
 import NotificationService from '../services/notificationService.js';
-import { s3, S3_BUCKET } from '../config/s3.js';
+import { getS3ServerDate, s3, S3_BUCKET } from '../config/s3.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { pipeline } from "stream";
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -115,10 +115,10 @@ export const uploadDocument = async (req, res) => {
 
         // Define valid document types
         const validDocumentTypes = [
-            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate','eleventhCertificate',
+            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate', 'eleventhCertificate',
             'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter',
-            'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate','pgconsolidatedCertificate','diplomaconsolidatedCertificate',
-            'diplomaCertificate', 'pgCertificate', 'trainingCertificates','interviewresume'
+            'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate', 'pgconsolidatedCertificate', 'diplomaconsolidatedCertificate',
+            'diplomaCertificate', 'pgCertificate', 'trainingCertificates', 'interviewresume'
         ];
 
         const validExperienceSubTypes = [
@@ -1053,7 +1053,7 @@ export const previewDocument = async (req, res) => {
                 panCard: 'panCard',
                 drivingLicense: 'drivingLicense',
                 passport: 'passport',
-                interviewresume:'interviewresume',
+                interviewresume: 'interviewresume',
                 addressProof: 'addressProof',
                 birthCertificate: 'birthCertificate',
                 tenthCertificate: 'tenthCertificate',
@@ -1104,8 +1104,12 @@ export const previewDocument = async (req, res) => {
             ResponseContentType: targetDocument.mimeType || 'application/pdf'
         });
 
+        // 🔑 Sign with S3's clock, not the server's local clock
+        const signingDate = await getS3ServerDate();
+
         const signedUrl = await getSignedUrl(s3, command, {
-            expiresIn: 60 * 5
+            expiresIn: 60 * 5,
+            signingDate,
         });
 
         return res.status(200).json({
@@ -1207,7 +1211,7 @@ export const downloadDocument = async (req, res) => {
                 diplomaCertificate: "diplomaCertificate",
                 consolidatedCertificate: "consolidatedCertificate",
                 pgconsolidatedCertificate: "pgconsolidatedCertificate",
-                diplomaconsolidatedCertificate:"diplomaconsolidatedCertificate",
+                diplomaconsolidatedCertificate: "diplomaconsolidatedCertificate",
                 signedOfferLetter: "signedOfferLetter",
                 bankPassbook: "bankPassbook",
             };
@@ -1334,52 +1338,56 @@ export const downloadDocument = async (req, res) => {
 
 
 export const previewAppointmentLetter = async (req, res) => {
-  try {
-    // ✅ Always use logged-in user
-    const employeeId = req.user._id;
+    try {
+        // ✅ Always use logged-in user
+        const employeeId = req.user._id;
 
-    const employee = await Employee.findById(employeeId);
+        const employee = await Employee.findById(employeeId);
 
-    if (!employee || !employee.appointmentLetters?.url) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment letter not found",
-      });
+        if (!employee || !employee.appointmentLetters?.url) {
+            return res.status(404).json({
+                success: false,
+                message: "Appointment letter not found",
+            });
+        }
+
+        let fileUrl = employee.appointmentLetters.url;
+
+        // Extract S3 key
+        let s3Key = fileUrl.split(".amazonaws.com/")[1];
+
+        if (s3Key.includes("?")) {
+            s3Key = s3Key.split("?")[0];
+        }
+
+        const command = new GetObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: s3Key,
+            ResponseContentDisposition: `inline; filename="${employee.appointmentLetters.fileName}"`,
+            ResponseContentType: "application/pdf",
+        });
+
+        // 🔑 Sign with S3's clock, not the server's local clock
+        const signingDate = await getS3ServerDate();
+
+        const signedUrl = await getSignedUrl(s3, command, {
+            expiresIn: 60 * 5,
+            signingDate,
+        });
+
+        return res.status(200).json({
+            success: true,
+            fileUrl: signedUrl,
+            expiresIn: 300,
+        });
+
+    } catch (error) {
+        console.error("Preview appointment letter error:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Error previewing appointment letter",
+        });
     }
-
-    let fileUrl = employee.appointmentLetters.url;
-
-    // Extract S3 key
-    let s3Key = fileUrl.split(".amazonaws.com/")[1];
-
-    if (s3Key.includes("?")) {
-      s3Key = s3Key.split("?")[0];
-    }
-
-    const command = new GetObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: s3Key,
-      ResponseContentDisposition: `inline; filename="${employee.appointmentLetters.fileName}"`,
-      ResponseContentType: "application/pdf",
-    });
-
-    const signedUrl = await getSignedUrl(s3, command, {
-      expiresIn: 60 * 5, // 5 mins
-    });
-
-    return res.status(200).json({
-      success: true,
-      fileUrl: signedUrl,
-      expiresIn: 300,
-    });
-
-  } catch (error) {
-    console.error("Preview appointment letter error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error previewing appointment letter",
-    });
-  }
 };
 
 
@@ -1387,59 +1395,59 @@ export const previewAppointmentLetter = async (req, res) => {
 // const streamPipeline = promisify(pipeline);
 
 export const downloadAppointmentLetter = async (req, res) => {
-  try {
-    // ✅ Logged-in employee only
-    const employeeId = req.user._id;
+    try {
+        // ✅ Logged-in employee only
+        const employeeId = req.user._id;
 
-    const employee = await Employee.findById(employeeId);
+        const employee = await Employee.findById(employeeId);
 
-    if (!employee || !employee.appointmentLetters?.url) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment letter not found",
-      });
+        if (!employee || !employee.appointmentLetters?.url) {
+            return res.status(404).json({
+                success: false,
+                message: "Appointment letter not found",
+            });
+        }
+
+        let fileUrl = employee.appointmentLetters.url;
+
+        // Extract S3 key
+        let s3Key = fileUrl.split(".amazonaws.com/")[1];
+
+        if (s3Key.includes("?")) {
+            s3Key = s3Key.split("?")[0];
+        }
+
+        const command = new GetObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: s3Key,
+        });
+
+        const file = await s3.send(command);
+
+        if (!file.Body) {
+            return res.status(404).json({
+                success: false,
+                message: "File not found in storage",
+            });
+        }
+
+        // Force download
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${employee.appointmentLetters.fileName}"`
+        );
+
+        await streamPipeline(file.Body, res);
+
+    } catch (error) {
+        console.error("Download appointment letter error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Error downloading appointment letter",
+        });
     }
-
-    let fileUrl = employee.appointmentLetters.url;
-
-    // Extract S3 key
-    let s3Key = fileUrl.split(".amazonaws.com/")[1];
-
-    if (s3Key.includes("?")) {
-      s3Key = s3Key.split("?")[0];
-    }
-
-    const command = new GetObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: s3Key,
-    });
-
-    const file = await s3.send(command);
-
-    if (!file.Body) {
-      return res.status(404).json({
-        success: false,
-        message: "File not found in storage",
-      });
-    }
-
-    // Force download
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${employee.appointmentLetters.fileName}"`
-    );
-
-    await streamPipeline(file.Body, res);
-
-  } catch (error) {
-    console.error("Download appointment letter error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Error downloading appointment letter",
-    });
-  }
 };
 
 
@@ -1460,28 +1468,35 @@ export const previewAppointmentLetterByAdmin = async (req, res) => {
             return res.status(404).json({ success: false, message: "Appointment letter not found" });
         }
 
-        // Extract S3 key from stored URL
         const s3Key = employee.appointmentLetters.url
-            .split('.amazonaws.com/')[1]
-            ?.split('?')[0];
+            .split(".amazonaws.com/")[1]
+            ?.split("?")[0];
 
         if (!s3Key) {
             return res.status(400).json({ success: false, message: "Invalid file URL" });
         }
 
         const command = new GetObjectCommand({
-            Bucket: process.env.AWS_S3_BUCKET,
+            Bucket: S3_BUCKET,
             Key: decodeURIComponent(s3Key),
         });
 
-        // Signed URL valid for 15 minutes
-        const signedUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 });
+        // 🔑 Sign with S3's clock, not the server's local clock
+        const signingDate = await getS3ServerDate();
+
+        console.log("[preview] local now:", new Date().toISOString());
+        console.log("[preview] signingDate:", signingDate.toISOString());
+
+        const signedUrl = await getSignedUrl(s3, command, {
+            expiresIn: 900,
+            signingDate,
+        });
 
         return res.status(200).json({
             success: true,
             fileUrl: signedUrl,
             fileName: employee.appointmentLetters.fileName,
-            isVerified: employee.appointmentLetters.isVerified
+            isVerified: employee.appointmentLetters.isVerified,
         });
     } catch (error) {
         console.error("Preview appointment letter by admin error:", error);

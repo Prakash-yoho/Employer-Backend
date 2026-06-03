@@ -20,7 +20,7 @@ import { uploadFaceImage } from "../utils/faceUpload.js";
 // ✅ must match the filename on disk exactly
 import { generateRelievingLetter } from '../services/Relievingletterservice.js';
 import { generateExperienceCertificate } from '../services/Experiencecertificateservice.js';
-import { s3, S3_BUCKET } from '../config/s3.js';           // ← same import as saveAppointmentLetterInS3.js
+import { s3, S3_BUCKET, getS3ServerDate } from '../config/s3.js';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SendMailJet } from '../utils/mailer.js';         // ← your Mailjet sender
@@ -39,7 +39,11 @@ const getSignedS3Url = async (storedUrl) => {
         ? decodeURIComponent(storedUrl.split('.amazonaws.com/')[1].split('?')[0])
         : storedUrl;
     const cmd = new GetObjectCommand({ Bucket: S3_BUCKET, Key: key });
-    return getSignedUrl(s3, cmd, { expiresIn: 900 });
+
+    // 🔑 Sign with S3's clock, not the server's local clock
+    const signingDate = await getS3ServerDate();
+
+    return getSignedUrl(s3, cmd, { expiresIn: 900, signingDate });
 };
 
 
