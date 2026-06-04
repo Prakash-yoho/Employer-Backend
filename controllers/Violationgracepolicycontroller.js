@@ -207,19 +207,30 @@ export async function computeSalaryViolations(opts = {}) {
   const dayRecords = [];
 
   for (const log of logs) {
+    // ── Late by / Early by ──────────────────────────────────────────────────
+    // Prefer the value STORED on the attendance record at clock-in / clock-out
+    // time. That value was computed against the office hours IN EFFECT on that
+    // day, so it stays correct even if office hours change later.
+    //
+    // Only fall back to recomputing from current office hours when the stored
+    // value is missing (e.g. legacy records saved before the field existed).
     const clockInMins  = timeStrToMinutes(log.clockIn);
     const clockOutMins = timeStrToMinutes(log.clockOut);
 
     const lateByFromStart =
-      clockInMins != null && clockInMins > officeStartMins
-        ? Math.round(clockInMins - officeStartMins)
-        : 0;
+      log.lateByMinutes != null
+        ? log.lateByMinutes // frozen value from that day's office start
+        : (clockInMins != null && clockInMins > officeStartMins
+            ? Math.round(clockInMins - officeStartMins)
+            : 0);
     const isLate = lateByFromStart > loginGraceMinutes;
 
     const earlyByFromEnd =
-      clockOutMins != null && clockOutMins < officeEndMins
-        ? Math.round(officeEndMins - clockOutMins)
-        : 0;
+      log.earlyByMinutes != null
+        ? log.earlyByMinutes // frozen value from that day's office end
+        : (clockOutMins != null && clockOutMins < officeEndMins
+            ? Math.round(officeEndMins - clockOutMins)
+            : 0);
     const isEarlyLogout = earlyByFromEnd > logoutGraceMinutes;
 
     const salaryBreakViolations = (log.breaks ?? [])
