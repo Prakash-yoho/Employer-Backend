@@ -34,6 +34,8 @@ import breakPolicyRoutes from "./routes/breakPolicyRoutes.js"
 import Violationgracepolicyroutes from "./routes/Violationgracepolicyroutes.js"
 
 import announcementRoutes from './routes/announcementRoutes.js'
+import payrollRoutes from "./routes/payrollRoutes.js";
+
 dotenv.config()
 
 connectDB()
@@ -89,6 +91,7 @@ app.use('/api/phases-schedules', PhaseScheduleRoutes);
 app.use("/api/projects",projectRoutes)
 app.use("/api/announcements",announcementRoutes)
 app.use("/api/salaryviolations", Violationgracepolicyroutes);
+app.use("/api/payslips", payrollRoutes);
 
 // ─── CRON JOBS ────────────────────────────────────────────────────────────────
 

@@ -170,11 +170,20 @@ export async function computeSalaryViolations(opts = {}) {
     windowStart = date;
     windowEnd   = date;
   } else if (month) {
-    attFilter.date = { $regex: `^${month}` };
+    // Resolve the SALARY CYCLE whose END falls in this calendar month.
+    // E.g. month=2026-05, startDay=21 → cycle 2026-04-21 .. 2026-05-20.
+    //
+    // Trick: use a reference date of (startDay - 1) within the selected month.
+    // That day is < startDay, so computeCycleWindow rolls back to the cycle
+    // that started the PREVIOUS month and ends on (startDay-1) of THIS month.
     const [y, m] = month.split("-").map(Number);
-    windowStart = `${y}-${String(m).padStart(2, "0")}-01`;
-    const daysInMonth = new Date(y, m, 0).getDate();
-    windowEnd = `${y}-${String(m).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+    const refDay = Math.max(1, startDay - 1);
+    const ref = new Date(y, m - 1, refDay);
+    const win = computeCycleWindow(startDay, 0, ref);
+    windowInfo = win;
+    attFilter.date = { $gte: win.startDate, $lte: win.endDate };
+    windowStart = win.startDate;
+    windowEnd   = win.endDate;
   } else if (year) {
     attFilter.date = { $regex: `^${year}` };
     windowStart = `${year}-01-01`;
@@ -191,8 +200,26 @@ export async function computeSalaryViolations(opts = {}) {
   // Optionally scope to one employee (used by the per-employee PDF report)
   if (employeeId) attFilter.employeeId = employeeId;
 
-  const logs = await Attendance.find(attFilter).lean();
   const todayStr = new Date().toISOString().split("T")[0];
+
+  // ── Cap the window at today ──
+  // For an in-progress cycle we must NOT count upcoming days. Trim both the
+  // NOT_MARKED walking range and the attendance query so future days never
+  // enter any calculation.
+  let effectiveEnd = windowEnd;
+  if (effectiveEnd && effectiveEnd > todayStr) {
+    effectiveEnd = todayStr;
+    windowEnd = todayStr;
+    // Re-apply the capped upper bound to the attendance date filter.
+    if (attFilter.date && typeof attFilter.date === "object" && attFilter.date.$lte) {
+      attFilter.date.$lte = todayStr;
+    } else if (typeof attFilter.date === "object" && attFilter.date.$regex) {
+      // month/year regex form → convert to a range capped at today
+      attFilter.date = { $gte: windowStart, $lte: todayStr };
+    }
+  }
+
+  const logs = await Attendance.find(attFilter).lean();
 
   const empCache = {};
   const getEmp = async (empId) => {
