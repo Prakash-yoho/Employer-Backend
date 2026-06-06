@@ -12,6 +12,8 @@ import {
   getMySlip,
   getMyReleasedMonths,
   downloadMonthViolationReport,
+  generatePayrollReport,
+  getReportEmployees,
 } from "../controllers/payrollController.js";
 
 const router = express.Router();
@@ -23,6 +25,10 @@ router.put("/payroll/skip-all",   authenticate, authorize(["EMPLOYER_HR", "EMPLO
 router.post("/payroll/release",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), releasePayroll);
 router.post("/payroll/unrelease", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), unreleasePayroll);
 router.put("/payroll/manual-days", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), setManualWorkedDays);
+
+// ── Reports (HR/Admin) ──
+router.get("/payroll/report-employees", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getReportEmployees);
+router.post("/payroll/report",          authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), generatePayrollReport);
 
 // ── Payslip + violation PDF (HR for anyone; employee for own) ──────────────────
 // Combined guard accepts BOTH HR and employee tokens; controller enforces

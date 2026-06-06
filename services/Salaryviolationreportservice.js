@@ -17,8 +17,11 @@ function addLetterheadToPage(doc, letterheadPath) {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 const fmtMin = (m) => {
   if (m == null) return '—';
-  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
-  return `${m}m`;
+  const mins = Math.round(m);
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
 };
 
 const BREAK_LABEL = { MORNING: 'Morning', LUNCH: 'Lunch', EVENING: 'Evening' };
