@@ -35,6 +35,7 @@ import Violationgracepolicyroutes from "./routes/Violationgracepolicyroutes.js"
 
 import announcementRoutes from './routes/announcementRoutes.js'
 import payrollRoutes from "./routes/payrollRoutes.js";
+import "./cron/midnightSweep.js";
 
 dotenv.config()
 

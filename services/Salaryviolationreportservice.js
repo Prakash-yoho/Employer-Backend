@@ -43,6 +43,7 @@ export const generateSalaryViolationReport = (payload) => {
     try {
       const {
         employee,
+        manualViolations = [],
         cycle = {},
         officeTiming = {},
         gracePolicy = {},
@@ -255,7 +256,7 @@ export const generateSalaryViolationReport = (payload) => {
         // Not marked attendance
         if (d.isNotMarked) {
           doc.text(
-            `• Not marked — no attendance recorded and no approved leave for this working day.`,
+            `• Not marked — no attendance recorded and no approved leave for this working day (salary deduction of 2 days).`,
             leftMargin + 8, currentY, { width: contentWidth - 8, align: 'left' }
           );
           currentY = doc.y + 3;
@@ -263,6 +264,32 @@ export const generateSalaryViolationReport = (payload) => {
 
         currentY = doc.y + 8;
       });
+
+      // ── HR-added manual violations ────────────────────────────────────────────
+      if (Array.isArray(manualViolations) && manualViolations.length > 0) {
+        if (currentY > 700) { doc.addPage(); currentY = topMargin; }
+        currentY += 4;
+        doc.font('Helvetica-Bold').fontSize(10).fillColor('#002B38')
+          .text('Additional Violations (added by HR)', leftMargin, currentY);
+        currentY = doc.y + 8;
+
+        manualViolations.forEach((mv) => {
+          if (currentY > 720) { doc.addPage(); currentY = topMargin; }
+          const dateLabel = mv.date
+            ? new Date(mv.date).toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })
+            : '—';
+          doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#000000')
+            .text(dateLabel, leftMargin, currentY);
+          currentY = doc.y + 3;
+          const dayWord = Number(mv.dayCost) === 1 ? 'day' : 'days';
+          doc.font('Helvetica').fontSize(9).fillColor('#333333')
+            .text(
+              `• ${mv.message} — salary deduction of ${mv.dayCost} ${dayWord}.`,
+              leftMargin + 8, currentY, { width: contentWidth - 8, align: 'left' }
+            );
+          currentY = doc.y + 8;
+        });
+      }
 
       // ── Closing + signature ──────────────────────────────────────────────────
       if (currentY > 690) {

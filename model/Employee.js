@@ -248,7 +248,7 @@ const employeeSchema = new Schema({
     },
     doj: {
     type: Date,
-    required: true
+    // required: true
 },
     officialPassword: {
         type: String,
@@ -370,7 +370,7 @@ const employeeSchema = new Schema({
     },
     annualSalary: {
         type: Number,
-        required:true,
+        // required:true,
         default: null
     },
 

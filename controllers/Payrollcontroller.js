@@ -127,7 +127,14 @@ async function buildPayroll(month, { employeeId } = {}) {
     const lopDays = await getLopDaysForWindow(emp.employeeId, windowStart, windowEnd);
 
     const empSt = stateMap[emp.employeeId] ?? {};
+    const hasEmpState = Object.prototype.hasOwnProperty.call(stateMap, emp.employeeId);
     const manualWorkedDays = empSt.manualWorkedDays;
+    const manualViolations = empSt.manualViolations ?? [];
+
+    // Manual violations add their dayCost on top of auto violation days.
+    // Expressed as "otherViolationCount equivalents" so it flows through the
+    // same 0.5-per-count math: a 1-day manual violation = 2 counts of 0.5.
+    const manualViolationDayCost = manualViolations.reduce((s, mv) => s + (Number(mv.dayCost) || 0), 0);
 
     let pay;
     if (manualWorkedDays != null) {
@@ -146,6 +153,7 @@ async function buildPayroll(month, { employeeId } = {}) {
         lopDays,
         notMarkedDays,
         otherViolationCount,
+        extraViolationDayCost: manualViolationDayCost, // manual violations add here
         standardDays: STANDARD_DAYS,
       });
     }
@@ -186,13 +194,21 @@ async function buildPayroll(month, { employeeId } = {}) {
       })),
       activeViolationCount: activeDays.length,
       totalViolationCount: allDays.length,
-      hasViolations: allDays.length > 0,
+      hasViolations: allDays.length > 0 || manualViolations.length > 0,
 
-      // Per-employee release + manual override state
-      released:         !!empSt.released,
-      releasedAt:       empSt.releasedAt ?? null,
+      // Per-employee release + manual override state.
+      // Per-employee flag is authoritative when an empState entry exists;
+      // the legacy global flag is a fallback only for records with no entry.
+      released:         hasEmpState ? !!empSt.released : !!release.released,
+      releasedAt:       empSt.releasedAt ?? release.releasedAt ?? null,
       manualWorkedDays: manualWorkedDays ?? null,
       isManual:         manualWorkedDays != null,
+
+      // HR-added manual violations
+      manualViolations: manualViolations.map((mv) => ({
+        id: mv.id, message: mv.message, date: mv.date, dayCost: mv.dayCost,
+      })),
+      manualViolationDayCost,
     });
   }
 
@@ -349,6 +365,65 @@ export const setManualWorkedDays = async (req, res) => {
   }
 };
 
+// ─── POST /api/payroll/manual-violation ───────────────────────────────────────
+// Body: { month, employeeId, message, date, dayCost }
+export const addManualViolation = async (req, res) => {
+  try {
+    const { month, employeeId, message, date, dayCost } = req.body;
+    if (!month || !employeeId || !message || !date)
+      return res.status(400).json({ success: false, message: "month, employeeId, message and date are required" });
+
+    const cost = Number(dayCost);
+    if (!Number.isFinite(cost) || cost <= 0)
+      return res.status(400).json({ success: false, message: "dayCost must be a positive number" });
+
+    const release = await getRelease(month);
+    let idx = release.empState.findIndex((s) => s.employeeId === employeeId);
+    if (idx < 0) { release.empState.push({ employeeId, manualViolations: [] }); idx = release.empState.length - 1; }
+    if (!release.empState[idx].manualViolations) release.empState[idx].manualViolations = [];
+
+    const entry = {
+      id: `mv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      message: String(message).trim(),
+      date: String(date),
+      dayCost: cost,
+    };
+    release.empState[idx].manualViolations.push(entry);
+    release.markModified("empState");
+    await release.save();
+
+    return res.status(200).json({ success: true, violation: entry });
+  } catch (err) {
+    console.error("addManualViolation Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── DELETE /api/payroll/manual-violation?month=&employeeId=&violationId= ──────
+// Reads from query params (DELETE bodies are unreliable across HTTP clients).
+export const removeManualViolation = async (req, res) => {
+  try {
+    const month = req.query.month || req.body?.month;
+    const employeeId = req.query.employeeId || req.body?.employeeId;
+    const violationId = req.query.violationId || req.body?.violationId;
+    if (!month || !employeeId || !violationId)
+      return res.status(400).json({ success: false, message: "month, employeeId and violationId required" });
+
+    const release = await getRelease(month);
+    const idx = release.empState.findIndex((s) => s.employeeId === employeeId);
+    if (idx >= 0 && release.empState[idx].manualViolations) {
+      release.empState[idx].manualViolations =
+        release.empState[idx].manualViolations.filter((mv) => mv.id !== violationId);
+      release.markModified("empState");
+      await release.save();
+    }
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("removeManualViolation Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ─── POST /api/payroll/unrelease ──────────────────────────────────────────────
 export const unreleasePayroll = async (req, res) => {
   try {
@@ -357,9 +432,22 @@ export const unreleasePayroll = async (req, res) => {
     const release = await getRelease(month);
 
     if (Array.isArray(employeeIds) && employeeIds.length > 0) {
+      // If a global release was in effect, materialize it into per-employee
+      // entries for ALL active employees first, so clearing a few doesn't leave
+      // the global flag contradicting per-employee state.
+      if (release.released) {
+        const allEmps = await Employee.find({ isActive: true }).select("employeeId").lean();
+        for (const e of allEmps) {
+          const i = release.empState.findIndex((s) => s.employeeId === e.employeeId);
+          if (i < 0) release.empState.push({ employeeId: e.employeeId, released: true, releasedAt: release.releasedAt });
+          else if (release.empState[i].released !== false) release.empState[i].released = true;
+        }
+        release.released = false; // global flag retired; per-employee is now source of truth
+      }
       for (const empId of employeeIds) {
         const idx = release.empState.findIndex((s) => s.employeeId === empId);
         if (idx >= 0) { release.empState[idx].released = false; release.empState[idx].releasedAt = null; }
+        else release.empState.push({ employeeId: empId, released: false });
       }
       release.markModified("empState");
     } else {
@@ -444,8 +532,9 @@ export const getMyReleasedMonths = async (req, res) => {
     const employeeId = req.user?.employeeId;
     if (!employeeId) return res.status(400).json({ success: false, message: "No employee context" });
 
-    // A month is available if the employee's per-employee state is released,
-    // OR the legacy global flag is set (covers release-everyone before empState).
+    // A month is available to this employee if their per-employee state says
+    // released. The legacy global flag is ONLY a fallback for old records that
+    // have no empState entry for this employee at all (pre-selective-release).
     const releases = await PayrollRelease.find({
       $or: [
         { released: true },
@@ -453,11 +542,14 @@ export const getMyReleasedMonths = async (req, res) => {
       ],
     }).select("month releasedAt released empState").sort({ month: -1 }).lean();
 
+    const isReleasedForEmp = (r) => {
+      const st = (r.empState ?? []).find((s) => s.employeeId === employeeId);
+      if (st) return !!st.released;          // per-employee state is authoritative
+      return !!r.released;                    // fallback: legacy global flag only when no per-emp state
+    };
+
     const months = releases
-      .filter((r) => {
-        const st = (r.empState ?? []).find((s) => s.employeeId === employeeId);
-        return st?.released || r.released;
-      })
+      .filter(isReleasedForEmp)
       .map((r) => {
         const st = (r.empState ?? []).find((s) => s.employeeId === employeeId);
         return { month: r.month, releasedAt: st?.releasedAt ?? r.releasedAt };
@@ -496,8 +588,14 @@ export const downloadMonthViolationReport = async (req, res) => {
       days: [],
     };
 
+    // Attach HR-added manual violations so the report includes them
+    const manualViolations = (empSt?.manualViolations ?? []).map((mv) => ({
+      message: mv.message, date: mv.date, dayCost: mv.dayCost,
+    }));
+
     const pdfBuffer = await generateSalaryViolationReport({
       employee,
+      manualViolations,
       cycle: { label: v.windowInfo?.label ?? month, startDate: v.windowInfo?.startDate, endDate: v.windowInfo?.endDate, startDay: v.startDay },
       officeTiming: v.officeTiming,
       gracePolicy: v.gracePolicy,

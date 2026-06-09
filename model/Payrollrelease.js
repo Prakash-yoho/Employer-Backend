@@ -32,6 +32,23 @@ const empStateSchema = new mongoose.Schema(
     // Manual worked-days override. When not null, it REPLACES the auto
     // (standardDays − LOP − violationDayCost) calculation entirely.
     manualWorkedDays: { type: Number, default: null },
+
+    // HR-added manual violations. Each ADDS its dayCost to the violation-day
+    // total (on top of auto attendance violations) and appears in the report.
+    manualViolations: {
+      type: [
+        new mongoose.Schema(
+          {
+            id:      { type: String, required: true }, // client-stable id
+            message: { type: String, required: true },
+            date:    { type: String, required: true }, // "YYYY-MM-DD"
+            dayCost: { type: Number, default: 0.5 },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
   },
   { _id: false }
 );

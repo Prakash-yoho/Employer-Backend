@@ -8,6 +8,8 @@ import {
   releasePayroll,
   unreleasePayroll,
   setManualWorkedDays,
+  addManualViolation,
+  removeManualViolation,
   downloadPayslip,
   getMySlip,
   getMyReleasedMonths,
@@ -25,6 +27,10 @@ router.put("/payroll/skip-all",   authenticate, authorize(["EMPLOYER_HR", "EMPLO
 router.post("/payroll/release",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), releasePayroll);
 router.post("/payroll/unrelease", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), unreleasePayroll);
 router.put("/payroll/manual-days", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), setManualWorkedDays);
+router.post("/payroll/manual-violation",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), addManualViolation);
+router.delete("/payroll/manual-violation", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), removeManualViolation);
+// POST alias for remove (use when your HTTP client can't send a DELETE body/query reliably)
+router.post("/payroll/manual-violation/remove", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), removeManualViolation);
 
 // ── Reports (HR/Admin) ──
 router.get("/payroll/report-employees", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getReportEmployees);

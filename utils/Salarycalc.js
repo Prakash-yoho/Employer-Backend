@@ -61,10 +61,15 @@ export function computeWorkedDaysAndPay({
   lopDays = 0,
   notMarkedDays = 0,
   otherViolationCount = 0,
+  extraViolationDayCost = 0,
   standardDays = 30,
   manualWorkedDays = null,
 }) {
-  const violationDayCost = notMarkedDays * 1 + otherViolationCount * 0.5;
+  // Day-cost weights per violation type:
+  //   NOT_MARKED      → 2 full days each
+  //   other violations→ 0.5 day each (late/early/break/missed-clockout)
+  const NOT_MARKED_DAY_COST = 2;
+  const violationDayCost = notMarkedDays * NOT_MARKED_DAY_COST + otherViolationCount * 0.5 + extraViolationDayCost;
 
   let workedDays;
   if (manualWorkedDays != null) {

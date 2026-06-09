@@ -9,6 +9,13 @@ import OfficeTiming from "../model/Officetiming.js";
 import BreakPolicy from "../model/BreakPolicy.js";
 import { hhmmToMinutes, timeStrToMinutes } from "./Officetimingcontroller.js";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST = "Asia/Kolkata";
 
 const bucketName = process.env.AWS_S3_BUCKET;
 const awsregion = process.env.AWS_REGION;
@@ -49,12 +56,16 @@ function parseLocation(location) {
   };
 }
 
-// Get current date & time
+// Get current date & time in IST.
+// CRITICAL: previously this used new Date().toISOString() (UTC), which caused
+// records created between 00:00–05:29 IST to be stored under the *previous*
+// day's date (because UTC was still on yesterday). All "today" comparisons
+// then broke, leaving yesterday's open session "Active" past midnight.
 function getNow() {
-  const now = new Date();
+  const now = dayjs().tz(IST);
   return {
-    date: now.toISOString().split("T")[0],
-    time: now.toLocaleTimeString(),
+    date: now.format("YYYY-MM-DD"),   // e.g. "2026-06-08" in IST
+    time: now.format("h:mm:ss A"),    // e.g. "9:34:23 PM" — matches existing format
   };
 }
 
@@ -318,7 +329,7 @@ export const getLogs = async (req, res) => {
 
     // ── Shared helper ─────────────────────────────────────────────────────────
     const buildCalendar = (logs, holidayDocs, startDate, endDate) => {
-      const today = new Date().toISOString().split("T")[0];
+      const today = dayjs().tz(IST).format("YYYY-MM-DD");
 
       // Build holidayMap: "YYYY-MM-DD" → full holiday doc
       const holidayMap = {};
@@ -597,7 +608,7 @@ export const getAllEmployeesAttendance = async (req, res) => {
   try {
     const { page = 1, limit = 10, date, search, status } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const targetDate = date || new Date().toISOString().split("T")[0];
+    const targetDate = date || dayjs().tz(IST).format("YYYY-MM-DD");
 
     // ── Fetch OfficeTiming dynamically ─────────────────────────────────
     const timing = await OfficeTiming.findOne({ key: "default" });
@@ -791,7 +802,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
 
     // ── Read OfficeTiming once for violation messages ─────────────────────────
     const timing = await getOfficeTiming();
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = dayjs().tz(IST).format("YYYY-MM-DD");
 
     // ── Build violations from already-stored fields on the Attendance doc ─────
     //
@@ -1170,7 +1181,7 @@ export const getEmployeeLogDetail = async (req, res) => {
 export const getAttendanceSummary = async (req, res) => {
   try {
     const { date } = req.query;
-    const targetDate = date || new Date().toISOString().split("T")[0];
+    const targetDate = date || dayjs().tz(IST).format("YYYY-MM-DD");
 
     const [todayLogs, totalEmployees] = await Promise.all([
       Attendance.find({ date: targetDate }),
