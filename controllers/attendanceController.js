@@ -439,7 +439,29 @@ export const getLogs = async (req, res) => {
     }
 
     // ── Day view / fallback ───────────────────────────────────────────────────
-    res.json(logs);
+    // Attach the office timing snapshot so the client can show the correct
+    // late-login cutoff (startTime + grace) after a page refresh. Without this
+    // the frontend has no startTime and renders "NaN:NaN".
+    const timing = await getOfficeTiming();
+    const officeTimingPayload = {
+      startTime: timing.startTime,
+      endTime: timing.endTime,
+      graceMinutes: timing.graceMinutes,
+    };
+
+    const enriched = logs.map((l) => {
+      const obj = l.toObject ? l.toObject() : { ...l };
+      obj._officeTiming = {
+        ...officeTimingPayload,
+        lateLogin: obj.lateLogin ?? false,
+        lateByMinutes: obj.lateByMinutes ?? null,
+        earlyLogout: obj.earlyLogout ?? false,
+        earlyByMinutes: obj.earlyByMinutes ?? null,
+      };
+      return obj;
+    });
+
+    res.json(enriched);
 
   } catch (err) {
     console.error("Get Logs Error:", err);
