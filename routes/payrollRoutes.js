@@ -18,6 +18,10 @@ import {
   downloadMonthViolationReport,
   generatePayrollReport,
   getReportEmployees,
+  getEmployeePayslipHistory,
+  getMonthPayslipHistory,
+  downloadHistoricalPayslip,
+  downloadHistoricalViolationReport,
 } from "../controllers/payrollController.js";
 
 const router = express.Router();
@@ -39,6 +43,12 @@ router.post("/payroll/manual-violation/remove", authenticate, authorize(["EMPLOY
 // ── Reports (HR/Admin) ──
 router.get("/payroll/report-employees", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getReportEmployees);
 router.post("/payroll/report",          authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), generatePayrollReport);
+
+// ── Payslip history (HR/Admin) ──
+router.get("/payroll/history",        authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getEmployeePayslipHistory);
+router.get("/payroll/history/month",  authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getMonthPayslipHistory);
+router.get("/payroll/history/:historyId/slip", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), downloadHistoricalPayslip);
+router.get("/payroll/history/:historyId/violation-report", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), downloadHistoricalViolationReport);
 
 // ── Payslip + violation PDF (HR for anyone; employee for own) ──────────────────
 // Combined guard accepts BOTH HR and employee tokens; controller enforces

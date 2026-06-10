@@ -1,6 +1,7 @@
 import Employee from "../model/Employee.js";
 import Leave from "../model/Leave.js";
 import PayrollRelease from "../model/PayrollRelease.js";
+import PayslipHistory from "../model/PayslipHistory.js";
 import { computeSalaryViolations } from "./ViolationGracePolicyController.js";
 import { calculateSalaryFromCTC, computeWorkedDaysAndPay } from "../utils/salaryCalc.js";
 import { generatePayslip } from "../services/payslipService.js";
@@ -55,7 +56,7 @@ async function getLopDaysForWindow(employeeId, windowStart, windowEnd) {
  * Returns { month, window, employees: [...] } where each employee has
  * salary breakdown, violation list, lop, worked days, net — with skips applied.
  */
-async function buildPayroll(month, { employeeId } = {}) {
+async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
   // Resolve cycle window from the violations engine (it knows the salary cycle).
   // We pass month=YYYY-MM so the window is that calendar month's cycle.
   const v = await computeSalaryViolations({ month, employeeId });
@@ -160,7 +161,7 @@ async function buildPayroll(month, { employeeId } = {}) {
 
     result.push({
       employeeId:  emp.employeeId,
-      name:        `${emp.firstName} ${emp.lastName}`,
+      name:        `${emp.firstName} ${emp.lastName}${emp.fatherName ? " " + emp.fatherName : ""}`,
       designation: emp.designation ?? "",
       department:  emp.department ?? "",
       email:       emp.officialEmail ?? "",
@@ -213,6 +214,37 @@ async function buildPayroll(month, { employeeId } = {}) {
     });
   }
 
+  // ── Freeze: overlay frozen snapshots for released employees ──
+  // A released slip must never change due to later policy/timing edits. For any
+  // employee with a CURRENT history snapshot, serve the frozen pay/violation
+  // data instead of the freshly computed values. Live flags (released/published)
+  // still come from PayrollRelease so revert/publish work normally.
+  // skipSnapshot=true returns purely LIVE data (used when creating a snapshot).
+  if (!skipSnapshot) {
+    const snapQuery = { month, isCurrent: true };
+    if (employeeId) snapQuery.employeeId = employeeId;
+    const snapshots = await PayslipHistory.find(snapQuery).lean();
+    const snapMap = {};
+    for (const s of snapshots) snapMap[s.employeeId] = s;
+
+    for (const r of result) {
+      const snap = snapMap[r.employeeId];
+      if (snap && r.released && snap.snapshot) {
+        const f = snap.snapshot;
+        r.breakdown            = f.breakdown ?? r.breakdown;
+        r.pay                  = f.pay ?? r.pay;
+        r.violations           = f.violations ?? r.violations;
+        r.activeViolationCount = f.activeViolationCount ?? r.activeViolationCount;
+        r.totalViolationCount  = f.totalViolationCount ?? r.totalViolationCount;
+        r.manualViolations     = f.manualViolations ?? r.manualViolations;
+        r.manualViolationDayCost = f.manualViolationDayCost ?? r.manualViolationDayCost;
+        r.ctcMonthly           = f.ctcMonthly ?? r.ctcMonthly;
+        r.frozen               = true;
+        r.version              = snap.version;
+      }
+    }
+  }
+
   return {
     month,
     window: { startDate: windowStart, endDate: windowEnd, label: v.windowInfo?.label ?? month },
@@ -240,11 +272,23 @@ export const getPayroll = async (req, res) => {
 
 // ─── PUT /api/payroll/skip ────────────────────────────────────────────────────
 // Body: { month, employeeId, violationIds: [] }  → set skipped list for one emp
+/** Throws-style guard: returns true if employee's slip is released (locked). */
+async function isEmployeeReleased(month, employeeId) {
+  const release = await PayrollRelease.findOne({ month }).lean();
+  if (!release) return false;
+  const st = (release.empState ?? []).find((s) => s.employeeId === employeeId);
+  if (st) return !!st.released;
+  return !!release.released;
+}
+
 export const updateSkippedViolations = async (req, res) => {
   try {
     const { month, employeeId, violationIds = [] } = req.body;
     if (!month || !employeeId)
       return res.status(400).json({ success: false, message: "month and employeeId required" });
+
+    if (await isEmployeeReleased(month, employeeId))
+      return res.status(409).json({ success: false, message: "Slip is released. Revert it first to make changes." });
 
     const release = await getRelease(month);
     const idx = release.skipped.findIndex((s) => s.employeeId === employeeId);
@@ -285,6 +329,47 @@ export const skipAllViolations = async (req, res) => {
 // Body: { month, employeeIds?: string[] }
 //   - employeeIds omitted/empty → release ALL employees (global flag too)
 //   - employeeIds present       → release only those employees (selective)
+// Freeze one employee's current live slip into a new PayslipHistory version.
+// Marks any previous current version as not-current. Returns the new version #.
+async function snapshotEmployee(month, employeeId, by) {
+  // Compute LIVE (bypass any existing snapshot overlay)
+  const live = await buildPayroll(month, { employeeId, skipSnapshot: true });
+  const emp = live.employees[0];
+  if (!emp) return null;
+
+  // Build frozen violation report data (same shape generateSalaryViolationReport wants)
+  let violationSnapshot = null;
+  try {
+    const vr = await computeSalaryViolations({ month, employeeId });
+    const ve = vr.byEmployee.find((x) => x.employeeId === employeeId) ?? null;
+    violationSnapshot = {
+      employee: ve,
+      manualViolations: emp.manualViolations ?? [],
+      cycle: { label: vr.windowInfo?.label ?? month, startDate: vr.windowInfo?.startDate, endDate: vr.windowInfo?.endDate, startDay: vr.startDay },
+      officeTiming: vr.officeTiming,
+      gracePolicy: vr.gracePolicy,
+    };
+  } catch (e) {
+    violationSnapshot = { manualViolations: emp.manualViolations ?? [] };
+  }
+
+  // Determine next version
+  const last = await PayslipHistory.findOne({ month, employeeId }).sort({ version: -1 }).lean();
+  const nextVersion = (last?.version ?? 0) + 1;
+
+  // Retire previous current snapshot(s)
+  await PayslipHistory.updateMany({ month, employeeId, isCurrent: true }, { $set: { isCurrent: false } });
+
+  await PayslipHistory.create({
+    month, employeeId, version: nextVersion,
+    releasedAt: new Date(), releasedBy: by, isCurrent: true,
+    snapshot: emp,
+    violationSnapshot,
+    cycleLabel: live.window?.label ?? month,
+  });
+  return nextVersion;
+}
+
 export const releasePayroll = async (req, res) => {
   try {
     const { month, employeeIds } = req.body;
@@ -300,29 +385,28 @@ export const releasePayroll = async (req, res) => {
       else release.empState.push({ employeeId: empId, ...patch });
     };
 
+    // Resolve the target employee list
+    let targetIds;
     if (Array.isArray(employeeIds) && employeeIds.length > 0) {
-      // Selective release
-      for (const empId of employeeIds) {
-        upsertEmpState(empId, { released: true, releasedAt: now, releasedBy: by });
-      }
-      release.markModified("empState");
-      await release.save();
-      return res.status(200).json({ success: true, month, releasedCount: employeeIds.length, releasedAt: now });
+      targetIds = employeeIds;
+    } else {
+      const allEmps = await Employee.find({ isActive: true }).select("employeeId").lean();
+      targetIds = allEmps.map((e) => e.employeeId);
+      release.released   = true;
+      release.releasedAt = now;
+      release.releasedBy = by;
     }
 
-    // Release everyone — set global flag AND every active employee's state
-    release.released   = true;
-    release.releasedAt = now;
-    release.releasedBy = by;
-
-    const allEmps = await Employee.find({ isActive: true }).select("employeeId").lean();
-    for (const e of allEmps) {
-      upsertEmpState(e.employeeId, { released: true, releasedAt: now, releasedBy: by });
+    // Snapshot each target FIRST (freeze current live numbers), then mark released
+    for (const empId of targetIds) {
+      await snapshotEmployee(month, empId, by);
+      upsertEmpState(empId, { released: true, releasedAt: now, releasedBy: by });
     }
+
     release.markModified("empState");
     await release.save();
 
-    return res.status(200).json({ success: true, month, releasedCount: allEmps.length, releasedAt: now });
+    return res.status(200).json({ success: true, month, releasedCount: targetIds.length, releasedAt: now });
   } catch (err) {
     console.error("releasePayroll Error:", err);
     return res.status(500).json({ success: false, message: err.message });
@@ -404,6 +488,9 @@ export const setManualWorkedDays = async (req, res) => {
     if (!month || !employeeId)
       return res.status(400).json({ success: false, message: "month and employeeId required" });
 
+    if (await isEmployeeReleased(month, employeeId))
+      return res.status(409).json({ success: false, message: "Slip is released. Revert it first to make changes." });
+
     // Coerce: null/""/undefined → clear override; otherwise a finite number.
     let value = null;
     if (workedDays !== null && workedDays !== "" && workedDays !== undefined) {
@@ -444,6 +531,9 @@ export const addManualViolation = async (req, res) => {
     if (!Number.isFinite(cost) || cost <= 0)
       return res.status(400).json({ success: false, message: "dayCost must be a positive number" });
 
+    if (await isEmployeeReleased(month, employeeId))
+      return res.status(409).json({ success: false, message: "Slip is released. Revert it first to make changes." });
+
     const release = await getRelease(month);
     let idx = release.empState.findIndex((s) => s.employeeId === employeeId);
     if (idx < 0) { release.empState.push({ employeeId, manualViolations: [] }); idx = release.empState.length - 1; }
@@ -475,6 +565,9 @@ export const removeManualViolation = async (req, res) => {
     const violationId = req.query.violationId || req.body?.violationId;
     if (!month || !employeeId || !violationId)
       return res.status(400).json({ success: false, message: "month, employeeId and violationId required" });
+
+    if (await isEmployeeReleased(month, employeeId))
+      return res.status(409).json({ success: false, message: "Slip is released. Revert it first to make changes." });
 
     const release = await getRelease(month);
     const idx = release.empState.findIndex((s) => s.employeeId === employeeId);
@@ -522,6 +615,12 @@ export const unreleasePayroll = async (req, res) => {
         }
       }
       release.markModified("empState");
+      // Mark each reverted employee's current snapshot as reverted (keep history)
+      const by = req.user?.employeeId ?? null;
+      await PayslipHistory.updateMany(
+        { month, employeeId: { $in: employeeIds }, isCurrent: true },
+        { $set: { isCurrent: false, revertedAt: new Date(), revertedBy: by } }
+      );
     } else {
       release.released = false;
       release.empState.forEach((s) => {
@@ -529,6 +628,12 @@ export const unreleasePayroll = async (req, res) => {
         s.published = false; s.publishedAt = null;
       });
       release.markModified("empState");
+      // Revert ALL current snapshots for the month (keep history)
+      const by = req.user?.employeeId ?? null;
+      await PayslipHistory.updateMany(
+        { month, isCurrent: true },
+        { $set: { isCurrent: false, revertedAt: new Date(), revertedBy: by } }
+      );
     }
     await release.save();
     return res.status(200).json({ success: true, month });
@@ -649,27 +754,42 @@ export const downloadMonthViolationReport = async (req, res) => {
     if (!isHR && !empPublished)
       return res.status(403).json({ success: false, message: "Not available yet" });
 
-    const v = await computeSalaryViolations({ month, employeeId });
-    const employee = v.byEmployee.find((e) => e.employeeId === employeeId) ?? {
-      employeeId, name: employeeId, designation: "", department: "",
-      lateCount: 0, earlyLogoutCount: 0, breakViolationCount: 0,
-      missedClockOutCount: 0, notMarkedCount: 0, totalViolationDays: 0, totalViolations: 0,
-      days: [],
-    };
+    // If a current frozen snapshot exists, serve the FROZEN violation data so
+    // the report stays identical to release time. Otherwise compute live.
+    const snap = await PayslipHistory.findOne({ month, employeeId, isCurrent: true }).lean();
+    let reportPayload;
+    if (snap?.violationSnapshot?.employee) {
+      const vs = snap.violationSnapshot;
+      reportPayload = {
+        employee: vs.employee,
+        manualViolations: vs.manualViolations ?? [],
+        cycle: vs.cycle ?? { label: snap.cycleLabel ?? month },
+        officeTiming: vs.officeTiming ?? {},
+        gracePolicy: vs.gracePolicy ?? {},
+        meta: {},
+      };
+    } else {
+      const v = await computeSalaryViolations({ month, employeeId });
+      const employee = v.byEmployee.find((e) => e.employeeId === employeeId) ?? {
+        employeeId, name: employeeId, designation: "", department: "",
+        lateCount: 0, earlyLogoutCount: 0, breakViolationCount: 0,
+        missedClockOutCount: 0, notMarkedCount: 0, totalViolationDays: 0, totalViolations: 0,
+        days: [],
+      };
+      const manualViolations = (empSt?.manualViolations ?? []).map((mv) => ({
+        message: mv.message, date: mv.date, dayCost: mv.dayCost,
+      }));
+      reportPayload = {
+        employee, manualViolations,
+        cycle: { label: v.windowInfo?.label ?? month, startDate: v.windowInfo?.startDate, endDate: v.windowInfo?.endDate, startDay: v.startDay },
+        officeTiming: v.officeTiming,
+        gracePolicy: v.gracePolicy,
+        meta: {},
+      };
+    }
 
-    // Attach HR-added manual violations so the report includes them
-    const manualViolations = (empSt?.manualViolations ?? []).map((mv) => ({
-      message: mv.message, date: mv.date, dayCost: mv.dayCost,
-    }));
-
-    const pdfBuffer = await generateSalaryViolationReport({
-      employee,
-      manualViolations,
-      cycle: { label: v.windowInfo?.label ?? month, startDate: v.windowInfo?.startDate, endDate: v.windowInfo?.endDate, startDay: v.startDay },
-      officeTiming: v.officeTiming,
-      gracePolicy: v.gracePolicy,
-      meta: {},
-    });
+    const employee = reportPayload.employee;
+    const pdfBuffer = await generateSalaryViolationReport(reportPayload);
 
     const fileName = `${(employee.name || employeeId).replace(/\s+/g, "_")}_${month}_violations.pdf`;
     res.setHeader("Content-Type", "application/pdf");
@@ -739,6 +859,129 @@ export const getReportEmployees = async (req, res) => {
       .map((e) => ({ employeeId: e.employeeId, name: e.name, designation: e.designation }));
     return res.status(200).json({ success: true, month, employees: released, total: released.length });
   } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── GET /api/payroll/history?month=&employeeId= ──────────────────────────────
+// HR/Admin — per-employee version history (all snapshots, newest first).
+export const getEmployeePayslipHistory = async (req, res) => {
+  try {
+    const { month, employeeId } = req.query;
+    if (!employeeId) return res.status(400).json({ success: false, message: "employeeId required" });
+    const q = { employeeId };
+    if (month) q.month = month;
+    const history = await PayslipHistory.find(q).sort({ month: -1, version: -1 }).lean();
+    const versions = history.map((h) => ({
+      id: String(h._id),
+      month: h.month,
+      version: h.version,
+      isCurrent: h.isCurrent,
+      releasedAt: h.releasedAt,
+      releasedBy: h.releasedBy,
+      revertedAt: h.revertedAt,
+      revertedBy: h.revertedBy,
+      cycleLabel: h.cycleLabel,
+      netSalary: h.snapshot?.pay?.netSalary ?? null,
+      workedDays: h.snapshot?.pay?.workedDays ?? null,
+      violationDayCost: h.snapshot?.pay?.violationDayCost ?? null,
+    }));
+    return res.status(200).json({ success: true, employeeId, versions });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── GET /api/payroll/history/month?month=YYYY-MM ─────────────────────────────
+// HR/Admin — overall month-level history: latest version per employee + counts.
+export const getMonthPayslipHistory = async (req, res) => {
+  try {
+    const month = req.query.month;
+    if (!month) return res.status(400).json({ success: false, message: "month required" });
+    const all = await PayslipHistory.find({ month }).sort({ employeeId: 1, version: -1 }).lean();
+
+    // Group by employee
+    const byEmp = {};
+    for (const h of all) {
+      if (!byEmp[h.employeeId]) byEmp[h.employeeId] = [];
+      byEmp[h.employeeId].push(h);
+    }
+    const employees = Object.entries(byEmp).map(([employeeId, versions]) => {
+      const current = versions.find((v) => v.isCurrent) ?? null;
+      const latest = versions[0];
+      return {
+        employeeId,
+        name: latest.snapshot?.name ?? employeeId,
+        totalVersions: versions.length,
+        currentVersion: current?.version ?? null,
+        isReleased: !!current,
+        latestNet: latest.snapshot?.pay?.netSalary ?? null,
+        lastReleasedAt: latest.releasedAt,
+        lastRevertedAt: latest.revertedAt,
+      };
+    });
+
+    return res.status(200).json({
+      success: true, month,
+      totalEmployees: employees.length,
+      totalSnapshots: all.length,
+      employees,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── GET /api/payroll/history/:historyId/slip ─────────────────────────────────
+// HR/Admin — download the payslip PDF of a specific historical version.
+export const downloadHistoricalPayslip = async (req, res) => {
+  try {
+    const { historyId } = req.params;
+    const h = await PayslipHistory.findById(historyId).lean();
+    if (!h) return res.status(404).json({ success: false, message: "Version not found" });
+
+    const pdfBuffer = await generatePayslip({ employee: h.snapshot, month: h.month });
+    const safeName = (h.snapshot?.name ?? h.employeeId).replace(/\s+/g, "_");
+    const fileName = `${safeName}_${h.employeeId}_${h.month}_v${h.version}_payslip.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error("downloadHistoricalPayslip Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── GET /api/payroll/history/:historyId/violation-report ─────────────────────
+// HR/Admin — download the FROZEN violation report PDF for a specific version.
+export const downloadHistoricalViolationReport = async (req, res) => {
+  try {
+    const { historyId } = req.params;
+    const h = await PayslipHistory.findById(historyId).lean();
+    if (!h) return res.status(404).json({ success: false, message: "Version not found" });
+
+    const vs = h.violationSnapshot;
+    if (!vs || !vs.employee)
+      return res.status(404).json({ success: false, message: "No violation data for this version" });
+
+    const pdfBuffer = await generateSalaryViolationReport({
+      employee: vs.employee,
+      manualViolations: vs.manualViolations ?? [],
+      cycle: vs.cycle ?? { label: h.cycleLabel ?? h.month },
+      officeTiming: vs.officeTiming ?? {},
+      gracePolicy: vs.gracePolicy ?? {},
+      meta: {},
+    });
+
+    const safeName = (h.snapshot?.name ?? h.employeeId).replace(/\s+/g, "_");
+    const fileName = `${safeName}_${h.employeeId}_${h.month}_v${h.version}_violations.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error("downloadHistoricalViolationReport Error:", err);
     return res.status(500).json({ success: false, message: err.message });
   }
 };
