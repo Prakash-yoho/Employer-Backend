@@ -37,6 +37,9 @@ import announcementRoutes from './routes/announcementRoutes.js'
 import payrollRoutes from "./routes/payrollRoutes.js";
 import "./cron/midnightSweep.js";
 
+import { syncTrueTime } from './utils/trueTime.js';
+import { getTimeStatus } from './utils/trueTime.js';
+
 dotenv.config()
 
 connectDB()
@@ -70,6 +73,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use("/public", express.static("public"));
 app.use("/api", defaultDocsRoutes);
 
+app.get("/api/attendance/time-status", (req, res) => res.json(getTimeStatus()));
+
+
 // Employer Routes
 app.use("/api/employer", employerRoutes);
 app.use('/api/employees', employeeRoutes);
@@ -95,6 +101,14 @@ app.use("/api/salaryviolations", Violationgracepolicyroutes);
 app.use("/api/payslips", payrollRoutes);
 
 // ─── CRON JOBS ────────────────────────────────────────────────────────────────
+
+// Sync server clock with authoritative time API on startup, then every hour.
+// Protects clock-in/out timestamps from local clock tampering or drift.
+syncTrueTime();
+cron.schedule("0 * * * *", () => {
+    console.log("[CRON] Running syncTrueTime...");
+    syncTrueTime();
+});
 
 // Runs at midnight every day — clears employees whose schedule toDate has passed
 cron.schedule("0 0 * * *", () => {

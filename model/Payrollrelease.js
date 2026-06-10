@@ -24,10 +24,17 @@ const empStateSchema = new mongoose.Schema(
   {
     employeeId: { type: String, required: true },
 
-    // Selective release — this employee's slip is released
+    // Stage 1 — "Released": HR-verified, included in reports. Does NOT grant
+    // employee access on its own.
     released:   { type: Boolean, default: false },
     releasedAt: { type: Date, default: null },
     releasedBy: { type: String, default: null },
+
+    // Stage 2 — "Published": employee can now see/download their slip.
+    // Only allowed once `released` is true.
+    published:   { type: Boolean, default: false },
+    publishedAt: { type: Date, default: null },
+    publishedBy: { type: String, default: null },
 
     // Manual worked-days override. When not null, it REPLACES the auto
     // (standardDays − LOP − violationDayCost) calculation entirely.

@@ -7,6 +7,8 @@ import {
   skipAllViolations,
   releasePayroll,
   unreleasePayroll,
+  publishPayroll,
+  unpublishPayroll,
   setManualWorkedDays,
   addManualViolation,
   removeManualViolation,
@@ -26,6 +28,8 @@ router.put("/payroll/skip",       authenticate, authorize(["EMPLOYER_HR", "EMPLO
 router.put("/payroll/skip-all",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), skipAllViolations);
 router.post("/payroll/release",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), releasePayroll);
 router.post("/payroll/unrelease", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), unreleasePayroll);
+router.post("/payroll/publish",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), publishPayroll);
+router.post("/payroll/unpublish", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), unpublishPayroll);
 router.put("/payroll/manual-days", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), setManualWorkedDays);
 router.post("/payroll/manual-violation",   authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), addManualViolation);
 router.delete("/payroll/manual-violation", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), removeManualViolation);

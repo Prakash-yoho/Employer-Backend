@@ -196,11 +196,12 @@ async function buildPayroll(month, { employeeId } = {}) {
       totalViolationCount: allDays.length,
       hasViolations: allDays.length > 0 || manualViolations.length > 0,
 
-      // Per-employee release + manual override state.
-      // Per-employee flag is authoritative when an empState entry exists;
-      // the legacy global flag is a fallback only for records with no entry.
+      // Stage 1 (released): HR-verified, in reports. Per-employee authoritative.
       released:         hasEmpState ? !!empSt.released : !!release.released,
       releasedAt:       empSt.releasedAt ?? release.releasedAt ?? null,
+      // Stage 2 (published): employee can see their slip.
+      published:        !!empSt.published,
+      publishedAt:      empSt.publishedAt ?? null,
       manualWorkedDays: manualWorkedDays ?? null,
       isManual:         manualWorkedDays != null,
 
@@ -328,6 +329,72 @@ export const releasePayroll = async (req, res) => {
   }
 };
 
+// ─── POST /api/payroll/publish ────────────────────────────────────────────────
+// Stage 2 — make slips visible to employees. Body: { month, employeeIds? }
+//   - Only employees who are RELEASED (stage 1) can be published.
+//   - employeeIds omitted/empty → publish ALL released employees.
+export const publishPayroll = async (req, res) => {
+  try {
+    const { month, employeeIds } = req.body;
+    if (!month) return res.status(400).json({ success: false, message: "month required" });
+
+    const release = await getRelease(month);
+    const now = new Date();
+    const by = req.user?.employeeId ?? null;
+
+    // Determine which empState entries are eligible (released = true)
+    const releasedEntries = release.empState.filter((s) => s.released);
+    if (releasedEntries.length === 0)
+      return res.status(400).json({ success: false, message: "No released slips to publish. Release (verify) first." });
+
+    let targets;
+    if (Array.isArray(employeeIds) && employeeIds.length > 0) {
+      const set = new Set(employeeIds);
+      targets = releasedEntries.filter((s) => set.has(s.employeeId));
+      // Block any requested id that isn't released yet
+      const notReleased = employeeIds.filter((id) => !releasedEntries.some((s) => s.employeeId === id));
+      if (notReleased.length > 0)
+        return res.status(400).json({ success: false, message: `Release first for: ${notReleased.join(", ")}` });
+    } else {
+      targets = releasedEntries;
+    }
+
+    targets.forEach((s) => { s.published = true; s.publishedAt = now; s.publishedBy = by; });
+    release.markModified("empState");
+    await release.save();
+
+    return res.status(200).json({ success: true, month, publishedCount: targets.length, publishedAt: now });
+  } catch (err) {
+    console.error("publishPayroll Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── POST /api/payroll/unpublish ──────────────────────────────────────────────
+// Revoke employee visibility (keeps stage-1 released). Body: { month, employeeIds? }
+export const unpublishPayroll = async (req, res) => {
+  try {
+    const { month, employeeIds } = req.body;
+    if (!month) return res.status(400).json({ success: false, message: "month required" });
+    const release = await getRelease(month);
+
+    if (Array.isArray(employeeIds) && employeeIds.length > 0) {
+      const set = new Set(employeeIds);
+      release.empState.forEach((s) => {
+        if (set.has(s.employeeId)) { s.published = false; s.publishedAt = null; }
+      });
+    } else {
+      release.empState.forEach((s) => { s.published = false; s.publishedAt = null; });
+    }
+    release.markModified("empState");
+    await release.save();
+    return res.status(200).json({ success: true, month });
+  } catch (err) {
+    console.error("unpublishPayroll Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ─── PUT /api/payroll/manual-days ─────────────────────────────────────────────
 // Body: { month, employeeId, workedDays: number|null }
 //   workedDays = null  → clear override (back to auto math)
@@ -446,13 +513,21 @@ export const unreleasePayroll = async (req, res) => {
       }
       for (const empId of employeeIds) {
         const idx = release.empState.findIndex((s) => s.employeeId === empId);
-        if (idx >= 0) { release.empState[idx].released = false; release.empState[idx].releasedAt = null; }
-        else release.empState.push({ employeeId: empId, released: false });
+        if (idx >= 0) {
+          release.empState[idx].released = false; release.empState[idx].releasedAt = null;
+          // Reverting stage 1 must also revoke stage 2 (can't be visible if not released)
+          release.empState[idx].published = false; release.empState[idx].publishedAt = null;
+        } else {
+          release.empState.push({ employeeId: empId, released: false });
+        }
       }
       release.markModified("empState");
     } else {
       release.released = false;
-      release.empState.forEach((s) => { s.released = false; s.releasedAt = null; });
+      release.empState.forEach((s) => {
+        s.released = false; s.releasedAt = null;
+        s.published = false; s.publishedAt = null;
+      });
       release.markModified("empState");
     }
     await release.save();
@@ -480,9 +555,10 @@ export const downloadPayslip = async (req, res) => {
     const emp = data.employees[0];
     if (!emp) return res.status(404).json({ success: false, message: "Employee not found" });
 
-    // Employees can only download AFTER their slip is released
-    if (!isHR && !emp.released)
-      return res.status(403).json({ success: false, message: "Payslip not released yet" });
+    // Employees can only download AFTER their slip is PUBLISHED (stage 2).
+    // HR can download anytime. (Released alone = HR-verified, not yet visible.)
+    if (!isHR && !emp.published)
+      return res.status(403).json({ success: false, message: "Payslip not available yet" });
 
     const pdfBuffer = await generatePayslip({ employee: emp, month, window: data.window });
 
@@ -509,14 +585,14 @@ export const getMySlip = async (req, res) => {
 
     const data = await buildPayroll(month, { employeeId });
     const slip = data.employees[0] ?? null;
-    if (!slip || !slip.released)
-      return res.status(403).json({ success: false, message: "Payslip not released yet" });
+    if (!slip || !slip.published)
+      return res.status(403).json({ success: false, message: "Payslip not available yet" });
 
     return res.status(200).json({
       success: true,
       month,
       window: data.window,
-      released: slip.released,
+      released: slip.published,
       slip,
     });
   } catch (err) {
@@ -532,27 +608,20 @@ export const getMyReleasedMonths = async (req, res) => {
     const employeeId = req.user?.employeeId;
     if (!employeeId) return res.status(400).json({ success: false, message: "No employee context" });
 
-    // A month is available to this employee if their per-employee state says
-    // released. The legacy global flag is ONLY a fallback for old records that
-    // have no empState entry for this employee at all (pre-selective-release).
+    // A month is available to this employee only if their slip is PUBLISHED
+    // (stage 2). Released-but-not-published slips stay hidden from employees.
     const releases = await PayrollRelease.find({
-      $or: [
-        { released: true },
-        { empState: { $elemMatch: { employeeId, released: true } } },
-      ],
-    }).select("month releasedAt released empState").sort({ month: -1 }).lean();
-
-    const isReleasedForEmp = (r) => {
-      const st = (r.empState ?? []).find((s) => s.employeeId === employeeId);
-      if (st) return !!st.released;          // per-employee state is authoritative
-      return !!r.released;                    // fallback: legacy global flag only when no per-emp state
-    };
+      empState: { $elemMatch: { employeeId, published: true } },
+    }).select("month releasedAt empState").sort({ month: -1 }).lean();
 
     const months = releases
-      .filter(isReleasedForEmp)
+      .filter((r) => {
+        const st = (r.empState ?? []).find((s) => s.employeeId === employeeId);
+        return !!st?.published;
+      })
       .map((r) => {
         const st = (r.empState ?? []).find((s) => s.employeeId === employeeId);
-        return { month: r.month, releasedAt: st?.releasedAt ?? r.releasedAt };
+        return { month: r.month, releasedAt: st?.publishedAt ?? st?.releasedAt ?? r.releasedAt };
       });
 
     return res.status(200).json({ success: true, months });
@@ -576,9 +645,9 @@ export const downloadMonthViolationReport = async (req, res) => {
 
     const release = await getRelease(month);
     const empSt = (release.empState ?? []).find((s) => s.employeeId === employeeId);
-    const empReleased = empSt?.released || release.released;
-    if (!isHR && !empReleased)
-      return res.status(403).json({ success: false, message: "Not released yet" });
+    const empPublished = !!empSt?.published;
+    if (!isHR && !empPublished)
+      return res.status(403).json({ success: false, message: "Not available yet" });
 
     const v = await computeSalaryViolations({ month, employeeId });
     const employee = v.byEmployee.find((e) => e.employeeId === employeeId) ?? {

@@ -11,6 +11,8 @@ import { hhmmToMinutes, timeStrToMinutes } from "./Officetimingcontroller.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
+// import { getNow } from "../utils/trueTime.js";
+import { getNow, correctedDate } from "../utils/trueTime.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -56,18 +58,7 @@ function parseLocation(location) {
   };
 }
 
-// Get current date & time in IST.
-// CRITICAL: previously this used new Date().toISOString() (UTC), which caused
-// records created between 00:00–05:29 IST to be stored under the *previous*
-// day's date (because UTC was still on yesterday). All "today" comparisons
-// then broke, leaving yesterday's open session "Active" past midnight.
-function getNow() {
-  const now = dayjs().tz(IST);
-  return {
-    date: now.format("YYYY-MM-DD"),   // e.g. "2026-06-08" in IST
-    time: now.format("h:mm:ss A"),    // e.g. "9:34:23 PM" — matches existing format
-  };
-}
+
 
 /** Lazily fetch (or create) the singleton OfficeTiming document. */
 async function getOfficeTiming() {
@@ -488,7 +479,7 @@ export const getAttendanceImageUrl = async (req, res) => {
       ResponseContentType: "image/jpeg",
     });
 
-    const signedUrl = await getSignedUrl(s3, command, { expiresIn: 60 * 5 }); // 5 min
+    const signedUrl = await getSignedUrl(s3, command, { expiresIn: 60 * 5, signingDate: correctedDate() });
 
     return res.status(200).json({
       success: true,
@@ -518,7 +509,7 @@ export const getAttendanceLogImages = async (req, res) => {
         let s3Key = url.split(".amazonaws.com/")[1];
         if (s3Key?.includes("?")) s3Key = s3Key.split("?")[0];
         const cmd = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-        return await getSignedUrl(s3, cmd, { expiresIn: 300 });
+        return await getSignedUrl(s3, cmd, { expiresIn: 300, signingDate: correctedDate() });
       } catch { return null; }
     };
 
@@ -572,7 +563,7 @@ const signUrl = async (url) => {
     let s3Key = url.split(".amazonaws.com/")[1];
     if (s3Key?.includes("?")) s3Key = s3Key.split("?")[0];
     const cmd = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-    return await getSignedUrl(s3, cmd, { expiresIn: 300 });
+    return await getSignedUrl(s3, cmd, { expiresIn: 300, signingDate: correctedDate() });
   } catch {
     return null;
   }

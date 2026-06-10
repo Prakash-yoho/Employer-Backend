@@ -9,17 +9,15 @@
 // Also runs once at server start (startupCatchUp) so sessions that slipped
 // through midnight while the server was offline get cleaned up immediately.
 //
+// "Today" is derived from nowIST() (authoritative true-time, tamper-resistant),
+// NOT the raw local clock — so the sweep can't be tricked by a wrong OS clock.
+//
 // Place this file at: src/cron/midnightSweep.js
-// Import it once from your server entry (e.g. app.js):  import "./cron/midnightSweep.js";
+// Import it once from your server entry (e.g. index.js):  import "./cron/midnightSweep.js";
 
 import cron from "node-cron";
-import dayjs from "dayjs";
-import utc from "dayjs/plugin/utc.js";
-import timezone from "dayjs/plugin/timezone.js";
 import Attendance from "../model/Attendance.js";
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
+import { nowIST } from "../utils/trueTime.js";
 
 const IST = "Asia/Kolkata";
 
@@ -38,7 +36,7 @@ function timeStrToMinutes(t) {
 
 // ─── Core sweep logic ─────────────────────────────────────────────────────────
 export async function sweepOpenSessions() {
-  const todayIST = dayjs().tz(IST).format("YYYY-MM-DD");
+  const todayIST = nowIST().format("YYYY-MM-DD");
 
   // Find all past sessions that were never clocked out
   const openSessions = await Attendance.find({
