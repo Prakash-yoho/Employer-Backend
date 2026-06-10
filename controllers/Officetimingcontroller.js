@@ -80,33 +80,37 @@ export const updateOfficeTiming = async (req, res) => {
   }
 };
 
-// ─── GET /api/office-timing/violations ────────────────────────────────────────
-// Query: month (YYYY-MM) | year (YYYY) | date (YYYY-MM-DD)
-//
-// Violation types returned per record:
-//   isLate          – clocked in after startTime + graceMinutes
-//   isEarlyLogout   – clocked out before endTime
-//   isMissedClockOut– had a clock-in on a past date but never clocked out
-//
-// "Past date" = date < today (today's active sessions are excluded).
+// ─── Helper: format raw minutes → "Xhr Ym" ────────────────────────────────────
+// 45 → "45m"  |  60 → "1hr"  |  90 → "1hr 30m"  |  125 → "2hr 5m"
+function fmtMins(mins) {
+  if (mins == null) return null;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}hr`;
+  return `${h}hr ${m}m`;
+}
+
 export const getViolationsReport = async (req, res) => {
   try {
-    const { month, year, date } = req.query;
+    const { month, year, date, startDate, endDate } = req.query;  // ← added startDate/endDate
 
     const timing = await getTiming();
-    const startTimeMins = hhmmToMinutes(timing.startTime);
-    const cutoffMins = startTimeMins + timing.graceMinutes;
-    const endTimeMins = hhmmToMinutes(timing.endTime);
 
-    // Today's date string – used to exclude still-active sessions
     const todayStr = new Date().toISOString().split("T")[0];
 
     // ── Build date filter ─────────────────────────────────────────────────────
     const filter = {};
-    if (date) filter.date = date;
-    else if (month) filter.date = { $regex: `^${month}` };
-    else if (year) filter.date = { $regex: `^${year}` };
-    else {
+    if (date) {
+      filter.date = date;
+    } else if (startDate && endDate) {
+      // ← salary-cycle range  e.g. 2026-04-21 → 2026-05-20
+      filter.date = { $gte: startDate, $lte: endDate };
+    } else if (month) {
+      filter.date = { $regex: `^${month}` };
+    } else if (year) {
+      filter.date = { $regex: `^${year}` };
+    } else {
       const d = new Date();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       filter.date = { $regex: `^${d.getFullYear()}-${m}` };
@@ -114,7 +118,6 @@ export const getViolationsReport = async (req, res) => {
 
     const logs = await Attendance.find(filter).lean();
 
-    // Cache employee lookups to avoid N+1 queries
     const empCache = {};
     const getEmp = async (empId) => {
       if (empCache[empId] !== undefined) return empCache[empId];
@@ -128,42 +131,39 @@ export const getViolationsReport = async (req, res) => {
     const violations = [];
 
     for (const log of logs) {
-      // timeStrToMinutes now returns whole minutes (seconds dropped)
-      const clockInMins = timeStrToMinutes(log.clockIn);
-      const clockOutMins = timeStrToMinutes(log.clockOut);
 
-      // ── Violation flags ───────────────────────────────────────────────────
-      // Late login: clock-in minute strictly after cutoff
-      //   e.g. cutoff=575 (9:35), clockIn=575 (9:35:xx) → NOT late ✓
-      //                           clockIn=576 (9:36:xx) → late      ✓
-      const isLate = clockInMins != null && clockInMins > cutoffMins;
+      // ── Use values STORED at clock-in/out time ────────────────────────────────
+      // Never re-compute from current timing — the office times may have changed
+      // since the employee clocked in, giving wrong late/early figures.
+      const isLate = log.lateLogin ?? false;
+      const isEarlyLogout = log.earlyLogout ?? false;
+      const lateByMinutes = log.lateByMinutes ?? null;   // saved by clockIn controller
+      const earlyByMinutes = log.earlyByMinutes ?? null;   // saved by clockOut controller
 
-      // Early logout: clock-out minute strictly before end time
-      const isEarlyLogout = clockOutMins != null && clockOutMins < endTimeMins;
-
-      // Missed clock-out: had a clock-in, never clocked out, day is over
-      //   Today's records are skipped — employee may still be working.
+      // isMissedClockOut has no stored field — safe to derive at query time
       const isMissedClockOut =
-        log.clockIn != null &&
-        !log.clockOut &&
-        log.date < todayStr;  // strictly past dates only
+        log.clockIn != null && !log.clockOut && log.date < todayStr;
 
-
-      // ── Break-duration violations ─────────────────────────────────────────────
+      // Break violations are already stored on the break sub-document
       const breakViolations = (log.breaks ?? [])
         .filter((b) => b.isBreakViolation && b.overByMinutes > 0)
-        .map((b) => ({
-          breakType: b.breakType,
-          takenMinutes: (b.allowedMinutes ?? 0) + b.overByMinutes,
-          allowedMinutes: b.allowedMinutes,
-          overByMinutes: b.overByMinutes,
-        }));
+        .map((b) => {
+          const taken = (b.allowedMinutes ?? 0) + b.overByMinutes;
+          return {
+            breakType: b.breakType,
+            takenMinutes: taken,
+            takenFormatted: fmtMins(taken),
+            allowedMinutes: b.allowedMinutes,
+            allowedFormatted: fmtMins(b.allowedMinutes),
+            overByMinutes: b.overByMinutes,
+            overFormatted: fmtMins(b.overByMinutes),
+          };
+        });
 
       const hasBreakViolation = breakViolations.length > 0;
 
-      // Merge into the existing violation check gate
-      if (!isLate && !isEarlyLogout && !isMissedClockOut && !hasBreakViolation) continue;
-
+      if (!isLate && !isEarlyLogout && !isMissedClockOut && !hasBreakViolation)
+        continue;
 
       const emp = await getEmp(log.employeeId);
 
@@ -178,31 +178,24 @@ export const getViolationsReport = async (req, res) => {
         clockIn: log.clockIn ?? null,
         clockOut: log.clockOut ?? null,
 
+        isLate,
+        lateByMinutes,
+        lateFormatted: fmtMins(lateByMinutes),    // "3hr 16m"
+
+        isEarlyLogout,
+        earlyByMinutes,
+        earlyFormatted: fmtMins(earlyByMinutes),
+
+        isMissedClockOut,
+
         breakViolations,
         hasBreakViolation,
-
-        // Late login
-        isLate,
-        lateByMinutes: isLate
-          ? Math.round(clockInMins - startTimeMins)  // from start, not grace cutoff
-          : null,
-
-        // Early logout
-        isEarlyLogout,
-        earlyByMinutes: isEarlyLogout
-          ? Math.round(endTimeMins - clockOutMins)
-          : null,
-
-        // Missed clock-out
-        isMissedClockOut,
       });
     }
 
-    // Sort: most recent date first, then employeeId
     violations.sort((a, b) =>
-      a.date > b.date ? -1
-        : a.date < b.date ? 1
-          : a.employeeId.localeCompare(b.employeeId)
+      a.date > b.date ? -1 : a.date < b.date ? 1
+        : a.employeeId.localeCompare(b.employeeId)
     );
 
     return res.status(200).json({

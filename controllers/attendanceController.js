@@ -593,6 +593,128 @@ const calcDurationMinutes = (start, end) => {
   return Math.floor(diffSeconds / 60);
 };
 
+
+
+
+// ─── Shared per-employee calendar builder ─────────────────────────────────────
+// Called for both ?month/year and the new ?startDate/endDate (salary cycle) mode
+const buildEmployeeCalendarRange = async ({
+  employeeId, startDate, endDate, timing, todayStr, computeViolations,
+}) => {
+  const capEnd = endDate > todayStr ? todayStr : endDate;
+
+  const years = [
+    ...new Set([
+      parseInt(startDate.split("-")[0]),
+      parseInt(capEnd.split("-")[0]),
+    ]),
+  ];
+
+  const [logs, holidayDocs] = await Promise.all([
+    Attendance.find({ employeeId, date: { $gte: startDate, $lte: capEnd } })
+      .sort({ date: -1 }).lean(),
+    Holiday.find({ year: { $in: years } }).lean(),
+  ]);
+
+  const logMap = Object.fromEntries(logs.map(l => [l.date, l]));
+  const holidayMap = {};
+  for (const h of holidayDocs)
+    holidayMap[dayjs.utc(h.date).format("YYYY-MM-DD")] = h;
+
+  const fullCalendar = [];
+  const cursor = new Date(startDate + "T00:00:00Z");
+  const end = new Date(capEnd + "T00:00:00Z");
+
+  while (cursor <= end) {
+    const dateStr = cursor.toISOString().split("T")[0];
+    const dow = cursor.getUTCDay();
+
+    if (dateStr > todayStr) { cursor.setUTCDate(cursor.getUTCDate() + 1); continue; }
+
+    const isWeekend = dow === 0 || dow === 6;
+    const hDoc = holidayMap[dateStr] ?? null;
+    const isHoliday = !!hDoc;
+
+    if (logMap[dateStr]) {
+      const log = logMap[dateStr];
+      const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
+      const breakMinutes = log.breaks.reduce(
+        (acc, b) => acc + (calcDurationMinutes(b.start, b.end) || 0), 0,
+      );
+      const violations = computeViolations(log);
+
+      fullCalendar.push({
+        _id: log._id, date: log.date,
+        clockIn: log.clockIn ?? null, clockOut: log.clockOut ?? null,
+        clockInLocation: log.clockInLocation ?? null,
+        clockOutLocation: log.clockOutLocation ?? null,
+        breaks: log.breaks.map(b => ({
+          start: b.start, end: b.end ?? null,
+          startLocation: b.startLocation, endLocation: b.endLocation,
+          duration: calcDurationMinutes(b.start, b.end),
+        })),
+        totalBreaks: log.breaks.length,
+        workDurationMinutes: workMinutes,
+        breakDurationMinutes: breakMinutes,
+        netWorkMinutes: workMinutes != null ? workMinutes - breakMinutes : null,
+        status: log.clockOut ? "present" : log.clockIn ? "incomplete" : "absent",
+        isHoliday, holidayName: hDoc?.name ?? null, holidayType: hDoc?.type ?? null,
+        lateLogin: log.lateLogin ?? false, lateByMinutes: log.lateByMinutes ?? null,
+        earlyLogout: log.earlyLogout ?? false, earlyByMinutes: log.earlyByMinutes ?? null,
+        violations, hasViolations: violations.length > 0,
+      });
+
+    } else if (isHoliday || isWeekend) {
+      let statusLabel, holidayType;
+      if (isHoliday) {
+        const lbl = { GOVERNMENT: "Government Holiday", OPTIONAL: "Optional Holiday", COMPANY: "Company Holiday" }[hDoc.type] ?? "Holiday";
+        statusLabel = `${hDoc.name} · ${lbl}`; holidayType = hDoc.type;
+      } else {
+        statusLabel = dow === 0 ? "Sunday · Weekend" : "Saturday · Weekend";
+        holidayType = "WEEKEND";
+      }
+      fullCalendar.push({
+        _id: `holiday-${dateStr}`, employeeId, date: dateStr,
+        status: "holiday", holidayType, statusLabel,
+        clockIn: null, clockOut: null, breaks: [], totalBreaks: 0,
+        workDurationMinutes: null, breakDurationMinutes: 0, netWorkMinutes: null,
+        lateLogin: false, lateByMinutes: null, earlyLogout: false, earlyByMinutes: null,
+        violations: [], hasViolations: false,
+      });
+
+    } else {
+      fullCalendar.push({
+        _id: `absent-${dateStr}`, employeeId, date: dateStr,
+        status: "absent", statusLabel: "No attendance marked for the day",
+        clockIn: null, clockOut: null, breaks: [], totalBreaks: 0,
+        workDurationMinutes: null, breakDurationMinutes: 0, netWorkMinutes: null,
+        lateLogin: false, lateByMinutes: null, earlyLogout: false, earlyByMinutes: null,
+        violations: [], hasViolations: false,
+      });
+    }
+
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  fullCalendar.sort((a, b) => (a.date > b.date ? -1 : 1));
+
+  const summary = {
+    present: fullCalendar.filter(l => l.status === "present").length,
+    incomplete: fullCalendar.filter(l => l.status === "incomplete").length,
+    absent: fullCalendar.filter(l => l.status === "absent").length,
+    holidays: fullCalendar.filter(l => l.status === "holiday").length,
+    late: fullCalendar.filter(l => l.lateLogin).length,
+    earlyLogout: fullCalendar.filter(l => l.earlyLogout).length,
+    missedLogout: fullCalendar.filter(l =>
+      l.violations?.some(v => v.type === "MISSED_LOGOUT")
+    ).length,
+    totalWorkMinutes: fullCalendar.reduce((a, l) => a + (l.netWorkMinutes ?? 0), 0),
+  };
+
+  return { fullCalendar, summary };
+};
+
+
 // ─── GET /api/admin/attendance ────────────────────────────────────────────────
 // Returns paginated list of all employees with their latest attendance summary
 export const getAllEmployeesAttendance = async (req, res) => {
@@ -781,7 +903,7 @@ export const getAllEmployeesAttendance = async (req, res) => {
 export const getEmployeeAttendanceLogs = async (req, res) => {
   try {
     const { employeeId } = req.params;
-    const { page = 1, limit = 20, month, year } = req.query;
+    const { page = 1, limit = 20, month, year, startDate, endDate } = req.query;
 
     const filter = { employeeId };
 
@@ -1030,6 +1152,23 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       return res.status(200).json({
         success: true,
         employeeId,
+        data: fullCalendar,
+        summary,
+      });
+    }
+
+
+    // ─── Salary-cycle / custom date-range view ────────────────────────────────────
+    // Triggered by ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+    if (startDate && endDate) {
+      const { fullCalendar, summary } = await buildEmployeeCalendarRange({
+        employeeId, startDate, endDate, timing, todayStr, computeViolations,
+      });
+
+      return res.status(200).json({
+        success: true,
+        employeeId,
+        cycleRange: { startDate, endDate },  // echo back so frontend can display it
         data: fullCalendar,
         summary,
       });
