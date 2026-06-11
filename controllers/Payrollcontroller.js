@@ -161,7 +161,7 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
 
     result.push({
       employeeId:  emp.employeeId,
-      name:        `${emp.firstName} ${emp.lastName}${emp.fatherName ? " " + emp.fatherName : ""}`,
+      name:        `${emp.firstName} ${emp.lastName}`,
       designation: emp.designation ?? "",
       department:  emp.department ?? "",
       email:       emp.officialEmail ?? "",

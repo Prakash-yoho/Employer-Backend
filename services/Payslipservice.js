@@ -146,7 +146,7 @@ export const generatePayslip = ({ employee, month }) => {
       [c2, c3, c4].forEach((x) => doc.moveTo(x, tY).lineTo(x, bodyBottom).stroke());
 
       // ── Footer totals (all prorated, consistent with UI) ──
-      const totalEarnings  = pay.proratedTotalEarnings + pay.totalDeduction;
+      const totalEarnings  = pay.proratedTotalEarnings;
       const totalDeduction = pay.totalDeduction;
       const netSalary      = pay.netSalary;
 

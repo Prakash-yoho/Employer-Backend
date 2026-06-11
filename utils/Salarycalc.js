@@ -96,7 +96,8 @@ export function computeWorkedDaysAndPay({
     special:     r2(breakdown.special     * factor),
   };
 
-  const proratedTotalEarnings = r2(
+  // Sum of the prorated earning components = the employee's take-home (NET).
+  const componentsSum = r2(
     Object.values(proratedEarnings).reduce((s, v) => s + v, 0)
   );
 
@@ -109,7 +110,11 @@ export function computeWorkedDaysAndPay({
   };
   const totalDeduction = r2(deductions.pfEmployee + deductions.pfEmployer + deductions.gratuity);
 
-  const netSalary = r2(proratedTotalEarnings);
+  // NET PAY = sum of prorated earning components (take-home).
+  // TOTAL EARNINGS = NET PAY + TOTAL DEDUCTIONS (gross, sample-payslip identity:
+  // e.g. 40000.00 = 35390.40 + 4609.60 on a full month).
+  const netSalary = componentsSum;
+  const proratedTotalEarnings = r2(netSalary + totalDeduction);
 
   return {
     standardDays,

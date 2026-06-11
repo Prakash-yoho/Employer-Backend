@@ -64,17 +64,16 @@ export const generateSalaryViolationReport = (payload) => {
 
       const buffers = [];
       doc.on('data', buffers.push.bind(buffers));
-      doc.on('end', () => {
-        // Apply letterhead to every buffered page
-        const range = doc.bufferedPageRange();
-        for (let i = range.start; i < range.start + range.count; i++) {
-          doc.switchToPage(i);
-          addLetterheadToPage(doc, letterheadPath);
-        }
-        resolve(Buffer.concat(buffers));
-      });
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
       doc.on('error', reject);
 
+      // Letterhead background on EVERY page:
+      // 'pageAdded' fires the moment addPage() creates a new page — BEFORE any
+      // content is drawn on it — so the letterhead sits underneath the text.
+      // (Drawing in the 'end' handler is too late: the PDF is already finalized.)
+      doc.on('pageAdded', () => addLetterheadToPage(doc, letterheadPath));
+
+      // First page isn't covered by 'pageAdded', draw it explicitly.
       addLetterheadToPage(doc, letterheadPath);
 
       // ── Layout constants (match relieving letter) ──────────────────────────
@@ -84,7 +83,7 @@ export const generateSalaryViolationReport = (payload) => {
       const contentWidth = rightMargin - leftMargin;
 
       const {
-        refNo      = 'K000000',
+        refNo      = employee.employeeId,
         letterDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }),
         hrName     = process.env.HR_NAME  || 'Hazeena Begum A',
         hrTitle    = process.env.HR_TITLE || 'SR Executive - Human Resource',
