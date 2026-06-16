@@ -9,6 +9,7 @@ import { hhmmToMinutes, timeStrToMinutes } from "./Officetimingcontroller.js";
 import { generateSalaryViolationReport } from "../services/salaryViolationReportService.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+import { getNow } from "../utils/trueTime.js";
 dayjs.extend(utc);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ async function getOfficeTiming() {
 async function detectNotMarkedDays({ dayRecords, windowStart, windowEnd, employeeId, logs }) {
   if (!windowStart || !windowEnd) return;
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = getNow().date;   // true server date (IST), not system clock
 
   // Cap the scan at today — never flag future days
   const scanEnd = windowEnd > todayStr ? todayStr : windowEnd;
@@ -200,7 +201,7 @@ export async function computeSalaryViolations(opts = {}) {
   // Optionally scope to one employee (used by the per-employee PDF report)
   if (employeeId) attFilter.employeeId = employeeId;
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = getNow().date;   // true server date (IST), not system clock
 
   // ── Cap the window at today ──
   // For an in-progress cycle we must NOT count upcoming days. Trim both the

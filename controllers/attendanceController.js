@@ -320,7 +320,7 @@ export const getLogs = async (req, res) => {
 
     // ── Shared helper ─────────────────────────────────────────────────────────
     const buildCalendar = (logs, holidayDocs, startDate, endDate) => {
-      const today = dayjs().tz(IST).format("YYYY-MM-DD");
+      const today = getNow().date;
 
       // Build holidayMap: "YYYY-MM-DD" → full holiday doc
       const holidayMap = {};
@@ -479,8 +479,10 @@ export const getAttendanceImageUrl = async (req, res) => {
       ResponseContentType: "image/jpeg",
     });
 
-    const signedUrl = await getSignedUrl(s3, command, { expiresIn: 60 * 5, signingDate: correctedDate() });
-
+    const signedUrl = await getSignedUrl(s3, command, {
+      expiresIn: 60 * 5,
+      signingDate: correctedDate(),   // ← true time, overrides presigner default
+    });
     return res.status(200).json({
       success: true,
       signedUrl,
@@ -563,7 +565,10 @@ const signUrl = async (url) => {
     let s3Key = url.split(".amazonaws.com/")[1];
     if (s3Key?.includes("?")) s3Key = s3Key.split("?")[0];
     const cmd = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-    return await getSignedUrl(s3, cmd, { expiresIn: 300, signingDate: correctedDate() });
+    return await getSignedUrl(s3, cmd, {
+      expiresIn: 300,
+      signingDate: correctedDate(),
+    });
   } catch {
     return null;
   }
@@ -721,7 +726,7 @@ export const getAllEmployeesAttendance = async (req, res) => {
   try {
     const { page = 1, limit = 10, date, search, status } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const targetDate = date || dayjs().tz(IST).format("YYYY-MM-DD");
+    const targetDate = date || getNow().date;
 
     // ── Fetch OfficeTiming dynamically ─────────────────────────────────
     const timing = await OfficeTiming.findOne({ key: "default" });
@@ -915,7 +920,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
 
     // ── Read OfficeTiming once for violation messages ─────────────────────────
     const timing = await getOfficeTiming();
-    const todayStr = dayjs().tz(IST).format("YYYY-MM-DD");
+    const todayStr = getNow().date;
 
     // ── Build violations from already-stored fields on the Attendance doc ─────
     //
@@ -1311,7 +1316,7 @@ export const getEmployeeLogDetail = async (req, res) => {
 export const getAttendanceSummary = async (req, res) => {
   try {
     const { date } = req.query;
-    const targetDate = date || dayjs().tz(IST).format("YYYY-MM-DD");
+    const targetDate = date || getNow().date;
 
     const [todayLogs, totalEmployees] = await Promise.all([
       Attendance.find({ date: targetDate }),

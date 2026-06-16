@@ -1,50 +1,58 @@
-// ─── True-Time Utility ───────────────────────────────────────────────────────
+// ─── True-Time Utility (monotonic-anchored) ──────────────────────────────────
 //
-// Fetches authoritative UTC time from a public time API and computes the
-// offset between true time and the local server clock. All attendance
-// timestamps are then derived as (Date.now() + offset), making the RECORDED
-// time tamper-resistant even if the OS clock is wrong.
+// KEY IDEA: We anchor the true server time to a MONOTONIC clock
+// (performance.now()), NOT to Date.now(). The monotonic clock only ever moves
+// forward at a steady rate and is COMPLETELY UNAFFECTED by system clock changes.
 //
-// The same offset can be fed into the AWS S3 client's `systemClockOffset`
-// (see config/s3.js) so presigned URLs are signed with corrected time too.
+//   At sync:   trueTimeAtSync   = <true UTC ms from time API>
+//              monotonicAtSync  = performance.now()
+//   Any time:  correctedNowMs() = trueTimeAtSync + (performance.now() - monotonicAtSync)
 //
-// Drop-in: import { getNow } from "../utils/trueTime.js";
+// Because performance.now() ignores system clock changes, correctedNowMs() stays
+// correct even if the OS clock is moved by days mid-session — with NO restart and
+// NO dependency on Date.now(). This is the single source of truth for the whole app.
+//
+// Exports (all backward compatible):
+//   syncTrueTime()    — call at startup + periodically
+//   getNow()          — { date:"YYYY-MM-DD", time:"h:mm:ss A" } in IST
+//   nowIST()          — dayjs object in IST
+//   correctedDate()   — Date object at true time (for S3 signingDate)
+//   correctedNowMs()  — true epoch ms
+//   getClockOffset()  — (trueTime - systemTime) computed FRESH each call (for S3 systemClockOffset)
+//   onTimeSync(cb)    — fire cb after each sync
+//   getTimeStatus()   — diagnostics + epochMs for frontend
 
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
+import { performance } from "perf_hooks";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const IST = "Asia/Kolkata";
 
-// Offset in ms: (true_utc_ms - Date.now()). Positive = local clock is behind.
-let serverTimeOffsetMs = 0;
-let lastSyncedAt = null;
+// ── Monotonic anchor state ────────────────────────────────────────────────────
+let _trueTimeAtSync  = Date.now();        // true epoch ms captured at last sync
+let _monotonicAtSync = performance.now(); // monotonic reading at last sync
+let _synced          = false;
+let _lastSyncedAt    = null;
 
-// Listeners fired after each successful sync (e.g. to update the S3 client).
 const syncListeners = [];
 
-// Each source's `extract` returns the true UTC time AS MILLISECONDS (number),
-// built from unambiguous fields — never a bare string JS might parse as local.
+// ── Time sources — extract returns true UTC ms (number), unambiguous ──────────
 const TIME_SOURCES = [
   {
     name: "worldtimeapi.org",
-    url: "https://worldtimeapi.org/api/timezone/Etc/UTC",
+    url:  "https://worldtimeapi.org/api/timezone/Etc/UTC",
     extract: (d) =>
-      typeof d.unixtime === "number"
-        ? d.unixtime * 1000                       // unix epoch seconds → ms (unambiguous)
-        : Date.parse(d.utc_datetime),             // has +00:00, safe to parse
+      typeof d.unixtime === "number" ? d.unixtime * 1000 : Date.parse(d.utc_datetime),
   },
   {
     name: "timeapi.io",
-    url: "https://timeapi.io/api/Time/current/zone?timeZone=UTC",
+    url:  "https://timeapi.io/api/Time/current/zone?timeZone=UTC",
     extract: (d) =>
-      Date.UTC(                                   // build explicitly as UTC
-        d.year, (d.month - 1), d.day,
-        d.hour, d.minute, d.seconds, d.milliSeconds || 0
-      ),
+      Date.UTC(d.year, d.month - 1, d.day, d.hour, d.minute, d.seconds, d.milliSeconds || 0),
   },
 ];
 
@@ -54,27 +62,24 @@ async function fetchTrueUtcMs() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const t0 = Date.now();
+      // Use monotonic clock for RTT so a wrong system clock can't skew it
+      const m0 = performance.now();
       const res = await fetch(src.url, { signal: controller.signal });
-      const t1 = Date.now();
+      const m1 = performance.now();
       clearTimeout(timeoutId);
 
-      if (!res.ok) {
-        console.warn(`[TrueTime] ${src.name} responded ${res.status}`);
-        continue;
-      }
+      if (!res.ok) { console.warn(`[TrueTime] ${src.name} responded ${res.status}`); continue; }
+
       const data = await res.json();
       const baseMs = src.extract(data);
       if (!baseMs || Number.isNaN(baseMs)) {
-        console.warn(`[TrueTime] ${src.name} returned an unusable time value`);
-        continue;
+        console.warn(`[TrueTime] ${src.name} returned unusable time`); continue;
       }
 
-      const networkDelayMs = Math.round((t1 - t0) / 2);
+      const networkDelayMs = Math.round((m1 - m0) / 2);
       const trueUtcMs = baseMs + networkDelayMs;
-
-      console.log(`[TrueTime] Synced from ${src.name} (RTT ${t1 - t0}ms)`);
-      return trueUtcMs;
+      console.log(`[TrueTime] Synced from ${src.name} (RTT ${Math.round(m1 - m0)}ms)`);
+      return { trueUtcMs, monotonic: m1 };
     } catch (err) {
       console.warn(`[TrueTime] ${src.name} failed: ${err.message}`);
     }
@@ -82,75 +87,81 @@ async function fetchTrueUtcMs() {
   throw new Error("All time sources failed");
 }
 
-/** Sync local-to-true offset. Call on startup + hourly. Never throws. */
+/** Sync true-time anchor. Call on startup + periodically. Never throws. */
 export async function syncTrueTime() {
   try {
-    const trueUtcMs = await fetchTrueUtcMs();
-    const localUtcMs = Date.now();
-    serverTimeOffsetMs = trueUtcMs - localUtcMs;
-    lastSyncedAt = new Date();
+    const { trueUtcMs, monotonic } = await fetchTrueUtcMs();
 
-    const driftSec = Math.round(serverTimeOffsetMs / 1000);
-    if (Math.abs(driftSec) > 5) {
-      console.warn(
-        `[TrueTime] ⚠️  Clock drift detected: ${driftSec}s ` +
-        `(local clock is ${driftSec > 0 ? "behind" : "ahead of"} true time). ` +
-        `Offset applied to recorded timestamps + AWS signing.`
-      );
+    _trueTimeAtSync  = trueUtcMs;
+    _monotonicAtSync = monotonic;
+    _synced          = true;
+    _lastSyncedAt    = new Date(trueUtcMs);
+
+    // Difference vs the (possibly wrong) system clock — purely informational
+    const skewSec = Math.round((correctedNowMs() - Date.now()) / 1000);
+    if (Math.abs(skewSec) > 5) {
+      console.warn(`[TrueTime] ⚠ System clock off by ${skewSec}s — using true time (clock changes now have NO effect)`);
     } else {
-      console.log(`[TrueTime] ✓ In sync (offset ${serverTimeOffsetMs}ms).`);
+      console.log(`[TrueTime] ✓ In sync (system skew ${skewSec}s).`);
     }
 
-    // Notify listeners (e.g. update s3.config.systemClockOffset)
     for (const cb of syncListeners) {
-      try { cb(serverTimeOffsetMs); } catch (e) { console.error("[TrueTime] listener error:", e); }
+      try { cb(getClockOffset()); } catch (e) { console.error("[TrueTime] listener error:", e); }
     }
   } catch (err) {
-    console.error(
-      `[TrueTime] Sync FAILED — recorded times will use the LOCAL clock ` +
-      `(offset stays ${serverTimeOffsetMs}ms). Reason: ${err.message}`
-    );
+    console.error(`[TrueTime] Sync FAILED — falling back to system clock. Reason: ${err.message}`);
   }
 }
 
-/** Current offset in ms (true - local). */
-export function getClockOffset() {
-  return serverTimeOffsetMs;
+// ── Core: true epoch ms, anchored to the monotonic clock ──────────────────────
+export function correctedNowMs() {
+  if (!_synced) return Date.now();  // not yet synced — best effort
+  return _trueTimeAtSync + (performance.now() - _monotonicAtSync);
 }
 
-/** Register a callback fired after every successful sync. Fires immediately too. */
+/**
+ * (trueTime - systemTime) computed FRESH on every call.
+ * Pass to AWS S3Client { systemClockOffset } so presigned URLs sign with true time.
+ * Because correctedNowMs() ignores the system clock, this offset is always
+ * whatever is needed to cancel out the current (possibly wrong) system clock.
+ */
+export function getClockOffset() {
+  return correctedNowMs() - Date.now();
+}
+
+/** Register a callback fired after every successful sync (and immediately if already synced). */
 export function onTimeSync(cb) {
   syncListeners.push(cb);
-  if (lastSyncedAt) cb(serverTimeOffsetMs); // give current value right away
+  if (_synced) cb(getClockOffset());
 }
 
-/** Current authoritative time as a dayjs object in IST. */
+/** Authoritative current time as a dayjs object in IST. */
 export function nowIST() {
-  return dayjs(Date.now() + serverTimeOffsetMs).tz(IST);
+  return dayjs(correctedNowMs()).tz(IST);
 }
 
-/** Drop-in replacement for the old getNow() in attendanceController. */
+/** Drop-in for attendance timestamps. */
 export function getNow() {
   const now = nowIST();
   return {
-    date: now.format("YYYY-MM-DD"),   // "2026-06-09"
-    time: now.format("h:mm:ss A"),    // "10:50:31 AM"
+    date: now.format("YYYY-MM-DD"),  // "2026-06-15"
+    time: now.format("h:mm:ss A"),   // "4:07:12 PM"
   };
 }
 
-/** A Date at the true (offset-corrected) time — pass to getSignedUrl({ signingDate }). */
+/** Date at true time — pass to getSignedUrl({ signingDate }). */
 export function correctedDate() {
-  return new Date(Date.now() + serverTimeOffsetMs);
+  return new Date(correctedNowMs());
 }
 
-/** Diagnostic — wire to a quick GET route to confirm sync is working. */
+/** Diagnostics + epochMs for the frontend /time-status endpoint. */
 export function getTimeStatus() {
   return {
-    isSynced: lastSyncedAt !== null,
-    lastSyncedAt,
-    serverTimeOffsetMs,
-    epochMs: Date.now() + serverTimeOffsetMs,   // ← ADD THIS LINE
-    trueTimeIST: nowIST().format("YYYY-MM-DD HH:mm:ss"),
-    rawLocalClockIST: dayjs().tz(IST).format("YYYY-MM-DD HH:mm:ss"),
+    isSynced:         _synced,
+    lastSyncedAt:     _lastSyncedAt,
+    epochMs:          correctedNowMs(),
+    clockOffsetMs:    getClockOffset(),
+    trueTimeIST:      nowIST().format("YYYY-MM-DD HH:mm:ss"),
+    rawSystemClockIST: dayjs().tz(IST).format("YYYY-MM-DD HH:mm:ss"),
   };
 }

@@ -1,6 +1,7 @@
 import OfficeTiming from "../model/Officetiming.js";
 import Attendance from "../model/Attendance.js";
 import Employee from "../model/Employee.js";
+import { getNow } from "../utils/trueTime.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -97,7 +98,7 @@ export const getViolationsReport = async (req, res) => {
 
     const timing = await getTiming();
 
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = getNow().date;
 
     // ── Build date filter ─────────────────────────────────────────────────────
     const filter = {};
