@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import { createEmployeeSchema, employeeChangePasswordSchema, employeeLoginSchema, employeeUpdateRequestSchema, updateEmployeeByAdminSchema, updateEmployeeProfileSchema } from '../validations/employeeValidation.js';
+import { adminChangePasswordSchema, createEmployeeSchema, employeeChangePasswordSchema, employeeLoginSchema, employeeUpdateRequestSchema, updateEmployeeByAdminSchema, updateEmployeeProfileSchema } from '../validations/employeeValidation.js';
 import Employee from '../model/Employee.js';
 import BlacklistedToken from '../model/BlacklistedToken.js';
 import { deleteImageFromS3, uploadImageToS3 } from '../utils/saveOfferLetterInS3.js';
@@ -10,7 +10,7 @@ import NotificationService from '../services/notificationService.js';
 import EmployerUser from '../model/EmployerUser.js';
 import Notification from '../model/Notification.js';
 import { sendAppointmentEmail, sendMail } from '../utils/mailer.js';
-import { newEmployeeTemplate } from '../utils/emailTemplates.js';
+import { newEmployeeTemplate, passwordChangedByAdminTemplate } from '../utils/emailTemplates.js';
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 import { uploadFaceImage } from "../utils/faceUpload.js";
@@ -507,23 +507,41 @@ export const updateEmployeeProfile = async (req, res) => {
     }
 };
 
-// Change employee password
+// Change employee password (ADMIN / HR only)
 export const changeEmployeePassword = async (req, res) => {
     try {
+        // Role check
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only ADMIN or HR can change employee passwords'
+            });
+        }
+
+        const { id } = req.params;
+
+        // Validate ID
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid employee ID format'
+            });
+        }
+
         // Validate request body
-        const { error, value } = employeeChangePasswordSchema.validate(req.body);
+        const { error, value } = adminChangePasswordSchema.validate(req.body);
         if (error) {
             return res.status(400).json({
                 success: false,
                 message: 'Validation error',
-                errors: error.details.map(detail => detail.message)
+                errors: error.details.map(d => d.message)
             });
         }
 
-        const { currentPassword, newPassword } = value;
+        const { newPassword } = value;
 
-        // Get employee with password
-        const employee = await Employee.findById(req.user._id);
+        // Find employee
+        const employee = await Employee.findById(id);
         if (!employee) {
             return res.status(404).json({
                 success: false,
@@ -531,27 +549,47 @@ export const changeEmployeePassword = async (req, res) => {
             });
         }
 
-        // Verify current password
-        const isPasswordValid = await bcrypt.compare(currentPassword, employee.officialPassword);
-        if (!isPasswordValid) {
+        if (!employee.isActive) {
             return res.status(400).json({
                 success: false,
-                message: 'Current password is incorrect'
+                message: 'Cannot change password for a resigned/inactive employee'
             });
         }
 
         // Hash new password
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(newPassword, salt);
+        employee.officialPassword = await bcrypt.hash(newPassword, salt);
+        employee.lastUpdatedBy = req.user._id;
+        employee.lastUpdatedAt = new Date();
 
-        // Update password
-        employee.officialPassword = hashedPassword;
         await employee.save();
+
+        // Send notification email with the new plain password (non-blocking)
+        if (employee.officialEmail) {
+            setTimeout(async () => {
+                try {
+                    await sendMail({
+                        to: employee.officialEmail,
+                        subject: `Your ${process.env.COMPANY_NAME} password has been reset`,
+                        html: passwordChangedByAdminTemplate(employee, newPassword)
+                    });
+                } catch (mailErr) {
+                    console.error('Password-change email error:', mailErr.message);
+                }
+            }, 1500);
+        }
 
         return res.status(200).json({
             success: true,
-            message: 'Password changed successfully'
+            message: 'Password changed successfully. Email sent to employee.',
+            data: {
+                employeeId: employee.employeeId,
+                fullName: `${employee.firstName} ${employee.lastName}`,
+                officialEmail: employee.officialEmail,
+                newPassword // returned only here so HR can copy it — not stored anywhere
+            }
         });
+
     } catch (error) {
         console.error('Change employee password error:', error);
         return res.status(500).json({
@@ -1981,14 +2019,14 @@ export const sendExperienceCertificate = async (req, res) => {
 
         // 3. Save to DB
         // 3. Save to DB
-const experienceCertificate = { url, fileName, sentAt: new Date() };
+        const experienceCertificate = { url, fileName, sentAt: new Date() };
 
-await Employee.updateOne(
-    { _id: employee._id },
-    { $set: { experienceCertificate } }
-);
+        await Employee.updateOne(
+            { _id: employee._id },
+            { $set: { experienceCertificate } }
+        );
 
-employee.experienceCertificate = experienceCertificate; // keep local ref in sync for response
+        employee.experienceCertificate = experienceCertificate; // keep local ref in sync for response
 
         // 4. Send Mailjet email
         let emailSent = false;

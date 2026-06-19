@@ -697,13 +697,13 @@ export const updateEmployeeByAdminSchema = Joi.object({
 
 
     annualSalary: Joi.number()
-    .min(0)
-    .optional()
-    .empty("")
-    .messages({
-        "number.base": "Annual salary must be a number",
-        "number.min": "Annual salary cannot be negative",
-    }),
+        .min(0)
+        .optional()
+        .empty("")
+        .messages({
+            "number.base": "Annual salary must be a number",
+            "number.min": "Annual salary cannot be negative",
+        }),
 
     isPermanentEmp: Joi.boolean()
         .optional()
@@ -1120,4 +1120,25 @@ export const updateEmployeeByAdminSchema = Joi.object({
     updateRequestReason: Joi.string().trim()
 }).min(1).messages({
     'object.min': 'At least one field is required for update'
+});
+
+
+export const adminChangePasswordSchema = Joi.object({
+    newPassword: Joi.string()
+        .min(8)
+        .max(64)
+        .pattern(/^(?=.*[A-Za-z])(?=.*\d)/)
+        .required()
+        .messages({
+            'string.min': 'Password must be at least 8 characters',
+            'string.pattern.base': 'Password must contain at least one letter and one number',
+            'any.required': 'New password is required'
+        }),
+    confirmPassword: Joi.any()
+        .valid(Joi.ref('newPassword'))
+        .required()
+        .messages({
+            'any.only': 'Confirm password does not match new password',
+            'any.required': 'Confirm password is required'
+        })
 });

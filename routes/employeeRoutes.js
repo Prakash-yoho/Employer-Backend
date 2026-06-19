@@ -30,14 +30,13 @@ router.post('/profile/cancel-update-request', cancelUpdateRequest);
 router.post('/profile/image', upload.single('profileImage'), handleMulterError, uploadEmployeeImage);
 // Delete profile image
 router.delete('/profile/image', deleteEmployeeImage);
-router.post('/change-password', changeEmployeePassword);
 router.post('/logout', employeeLogout);
 
 
 // Admin/HR protected routes (require employer authentication)
 router.use(authenticate);
 
-// Create employee (ADMIN/HR only)
+router.post('/:id/change-password', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), changeEmployeePassword);// Create employee (ADMIN/HR only)
 router.post('/', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), createEmployee);
 
 // Get all employees (ADMIN/HR only)

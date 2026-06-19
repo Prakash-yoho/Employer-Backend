@@ -836,3 +836,104 @@ Hi <strong>${data.employeeName}</strong> (${data.employeeId}),
 </html>
 `;
 };
+
+
+
+export const passwordChangedByAdminTemplate = (employee, newPassword) => {
+  const companyName = process.env.COMPANY_NAME || 'Company';
+  const portalUrl = process.env.FRONTEND_EMPLOYER_EMPLOYEE || '#';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #111111;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: bold;
+      margin: 0 0 16px;
+      color: #111111;
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: bold;
+      margin: 22px 0 8px;
+      color: #111111;
+    }
+    p {
+      font-size: 14px;
+      line-height: 1.7;
+      margin: 10px 0;
+      color: #333333;
+    }
+    .btn {
+      display: inline-block;
+      background: #E05C1A;
+      color: #ffffff !important;
+      padding: 12px 26px;
+      text-decoration: none !important;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 14px;
+      margin-top: 18px;
+    }
+    .note {
+      margin-top: 28px;
+      font-size: 13px;
+      color: #888888;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <h2>Password Reset</h2>
+
+    <p>Your account password has been updated.</p>
+
+    <p>
+      This is to inform you that <strong>${employee.firstName} ${employee.lastName}</strong>
+      (<strong>${employee.employeeId}</strong>), your account password for the
+      <strong>${companyName}</strong> Employee Portal has been reset by HR / Admin.
+      Please use the new credentials below to log in.
+    </p>
+
+    <h3>Login Credentials</h3>
+
+    <p>
+      <strong>Employee ID:</strong> ${employee.employeeId}<br/>
+      <strong>Official Email:</strong> ${employee.officialEmail}<br/>
+      <strong>New Password:</strong> ${newPassword}
+    </p>
+
+    <h3>Important Note</h3>
+
+    <p>
+      Please <strong>keep this password safe</strong>. For security reasons, this
+      password will not be regenerated or resent frequently. Store it in a secure
+      place and do not share it with anyone.
+    </p>
+
+    <a href="${portalUrl}" target="_blank" class="btn">Login to Portal</a>
+
+    <p class="note">This is an automated message. Please do not reply.</p>
+
+  </div>
+</body>
+</html>
+  `;
+};
