@@ -4,7 +4,7 @@ import PayrollRelease from "../model/Payrollrelease.js";
 import PayslipHistory from "../model/Paysliphistory.js";
 import { computeSalaryViolations } from "./Violationgracepolicycontroller.js";
 import { calculateSalaryFromCTC, computeWorkedDaysAndPay } from "../utils/Salarycalc.js";
-import { generatePayslip } from "../services/payslipService.js";
+import { generatePayslip } from "../services/Payslipservice.js";
 import { generateSalaryViolationReport } from "../services/Salaryviolationreportservice.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
