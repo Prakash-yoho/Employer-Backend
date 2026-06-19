@@ -61,7 +61,7 @@ const leaveSchema = new Schema({
     isSplit: { type: Boolean, default: false },
     splitNote: { type: String, default: null },
     reason: { type: String, required: true, trim: true, minlength: 10, maxlength: 500 },
-
+    cancelReason: { type: String, trim: true, minlength: 10, maxlength: 500, default: null },
     isSpecialLeave: { type: Boolean, default: false },
     specialLeaveNote: { type: String, default: null },
 

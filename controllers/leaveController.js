@@ -66,12 +66,14 @@ export const fmtLeave = (l, withDetail = false) => {
         sandwichDates: l.sandwichDates ?? [],
         clBucketSummary: l.clBucketSummary ?? [],
         reason: l.reason,
+        cancelReason: l.cancelReason,
         status: fmtStatus(l.status),
         appliedAt: l.appliedAt,
         approvedComments: l.approvedComments,
         rejectedComments: l.rejectedComments,
         approvedAt: l.approvedAt,
         rejectedAt: l.rejectedAt,
+        cancelledAt: l.cancelledAt,
         department: l.department,
         employeeName: l.employeeName,
         employeeId: l.employeeId,
@@ -416,14 +418,24 @@ export const cancelLeaveRequest = async (req, res) => {
         if (dayjs.utc(leave.startDate).startOf('day').isBefore(dayjs.utc().startOf('day')))
             return res.status(400).json({ success: false, message: 'Cannot cancel a leave that has already started' });
 
+        // ── Validate cancel reason (compulsory, min 10 chars) ────────────────
+        const cancelReason = sanitize(req.body?.cancelReason ?? '');
+        if (!cancelReason)
+            return res.status(400).json({ success: false, message: 'Cancellation reason is required' });
+        if (cancelReason.length < 10)
+            return res.status(400).json({ success: false, message: 'Cancellation reason must be at least 10 characters' });
+        if (cancelReason.length > 500)
+            return res.status(400).json({ success: false, message: 'Cancellation reason cannot exceed 500 characters' });
+
         // ── Save cancellation ─────────────────────────────────────────────────
-        const wasApproved       = leave.status === 'APPROVED';
+        const wasApproved = leave.status === 'APPROVED';
         const cancelledLeaveType = leave.leaveType;
-        const cancelledYear     = dayjs.utc(leave.startDate).year();
+        const cancelledYear = dayjs.utc(leave.startDate).year();
 
         leave.status              = 'CANCELLED';
         leave.cancelledAt         = new Date();
         leave.cancelledByEmployee = true;
+        leave.cancelReason        = cancelReason;
         await leave.save();
 
         // ── Email: notify HR of cancellation ─────────────────────────────────
@@ -432,11 +444,13 @@ export const cancelLeaveRequest = async (req, res) => {
             subject: `Leave Cancelled – ${leave.employeeName} (${leave.requestId})`,
             html:    leaveEmailTemplate('CANCELLED_TO_HR', {
                 employeeName: leave.employeeName,
+                employeeId:   leave.employeeId,
                 requestId:    leave.requestId,
                 leaveType:    fmtType(leave.leaveType),
                 startDate:    leave.startDate,
                 endDate:      leave.endDate,
                 totalDays:    leave.totalDays,
+                cancelReason: leave.cancelReason,
                 wasApproved,
             }),
         }).catch(err => console.error('Error sending cancellation email:', err));
@@ -457,18 +471,18 @@ export const cancelLeaveRequest = async (req, res) => {
 
         for (const hr of hrAdmins) {
             await Notification.create({
-                title:            wasApproved ? 'Approved Leave Cancelled' : 'Leave Cancelled',
-                description:      `${leave.employeeName} cancelled ${fmtType(leave.leaveType)} (${leave.requestId})`,
-                type:             'LEAVE_CANCELLED',
-                recipientType:    hr.role,
-                recipientId:      hr._id,
-                recipientModel:   'EmployerUser',
-                senderId:         req.user._id,
-                senderModel:      'Employee',
+                title: wasApproved ? 'Approved Leave Cancelled' : 'Leave Cancelled',
+                description: `${leave.employeeName} cancelled ${fmtType(leave.leaveType)} (${leave.requestId})`,
+                type: 'LEAVE_CANCELLED',
+                recipientType: hr.role,
+                recipientId: hr._id,
+                recipientModel: 'EmployerUser',
+                senderId: req.user._id,
+                senderModel: 'Employee',
                 relatedEntityType: 'Leave',
-                relatedEntityId:  leave._id,
-                status:           'unread',
-                priority:         wasApproved ? 'high' : 'low',
+                relatedEntityId: leave._id,
+                status: 'unread',
+                priority: wasApproved ? 'high' : 'low',
             });
         }
 
@@ -481,8 +495,8 @@ export const cancelLeaveRequest = async (req, res) => {
                 wasApproved,
                 recalculation: {
                     sandwichUpdated: recalcResult.sandwich.updated,
-                    leavesUpdated:   recalcResult.cl.recalculated,
-                    allChanges:      recalcResult.allChanges,
+                    leavesUpdated: recalcResult.cl.recalculated,
+                    allChanges: recalcResult.allChanges,
                 },
             },
         });
@@ -555,7 +569,7 @@ export const updateLeaveStatus = async (req, res) => {
                 type: status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
                 recipientType: 'EMPLOYEE', recipientId: leave.employee, recipientModel: 'Employee',
                 senderId: req.user._id, senderModel: 'EmployerUser',
-                relatedEntityType: 'Leave', relatedEntityId: leave._id,  
+                relatedEntityType: 'Leave', relatedEntityId: leave._id,
                 status: 'unread', priority: 'medium',
             });
             setTimeout(async () => {

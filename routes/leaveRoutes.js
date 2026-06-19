@@ -26,7 +26,7 @@ router.get('/me/all-for-calc', authenticateEmployee, getAllLeavesForCalc);
 router.get('/me/balance', authenticateEmployee, getLeaveBalance);
 router.get('/me', authenticateEmployee, getMyLeaveRequests);
 router.get('/me/:leaveRequestId', authenticateEmployee, getLeaveRequestById);
-router.delete('/me/:leaveRequestId/cancel', authenticateEmployee, cancelLeaveRequest);
+router.put('/me/:leaveRequestId/cancel', authenticateEmployee, cancelLeaveRequest);
 router.get('/upcoming', authenticateEmployee, getUpcomingLeaves);
 router.get('/blocked-dates', authenticateEmployee, getBlockedDates);
 
