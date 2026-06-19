@@ -33,7 +33,7 @@ async function getLopDaysForWindow(employeeId, windowStart, windowEnd) {
     leaveType: "LOP",
     status: "APPROVED",
     startDate: { $lte: dayjs.utc(windowEnd).endOf("day").toDate() },
-    endDate:   { $gte: dayjs.utc(windowStart).startOf("day").toDate() },
+    endDate: { $gte: dayjs.utc(windowStart).startOf("day").toDate() },
   }).select("startDate endDate totalDays lopDays").lean();
 
   // Also count partial-LOP (split CL+LOP) via lopDays field on CASUAL leaves
@@ -43,12 +43,66 @@ async function getLopDaysForWindow(employeeId, windowStart, windowEnd) {
     status: "APPROVED",
     lopDays: { $gt: 0 },
     startDate: { $lte: dayjs.utc(windowEnd).endOf("day").toDate() },
-    endDate:   { $gte: dayjs.utc(windowStart).startOf("day").toDate() },
+    endDate: { $gte: dayjs.utc(windowStart).startOf("day").toDate() },
   }).select("lopDays").lean();
 
-  const fullLop  = leaves.reduce((s, l) => s + (l.lopDays ?? l.totalDays ?? 0), 0);
+  const fullLop = leaves.reduce((s, l) => s + (l.lopDays ?? l.totalDays ?? 0), 0);
   const splitLop = splitLeaves.reduce((s, l) => s + (l.lopDays ?? 0), 0);
   return fullLop + splitLop;
+}
+
+
+/**
+ * Bulk version of getLopDaysForWindow — fetches LOP days for many employees
+ * in two aggregations instead of 2 queries per employee.
+ *
+ * Mirrors the exact semantics of getLopDaysForWindow:
+ *   - Full LOP leaves   → sum lopDays ?? totalDays ?? 0
+ *   - Split CASUAL+LOP  → sum lopDays
+ * Returns Map<employeeId, lopDays>.
+ */
+async function getLopDaysForWindowBulk(employeeIds, windowStart, windowEnd) {
+  if (!employeeIds?.length) return new Map();
+
+  const endBoundary = dayjs.utc(windowEnd).endOf("day").toDate();
+  const startBoundary = dayjs.utc(windowStart).startOf("day").toDate();
+
+  const baseMatch = {
+    employeeId: { $in: employeeIds },
+    status: "APPROVED",
+    startDate: { $lte: endBoundary },
+    endDate: { $gte: startBoundary },
+  };
+
+  const [fullLopRows, splitLopRows] = await Promise.all([
+    // Full LOP leaves
+    Leave.aggregate([
+      { $match: { ...baseMatch, leaveType: "LOP" } },
+      {
+        $group: {
+          _id: "$employeeId",
+          days: {
+            $sum: { $ifNull: ["$lopDays", { $ifNull: ["$totalDays", 0] }] },
+          },
+        },
+      },
+    ]),
+    // Split CL + LOP (CASUAL with lopDays > 0)
+    Leave.aggregate([
+      { $match: { ...baseMatch, leaveType: "CASUAL", lopDays: { $gt: 0 } } },
+      {
+        $group: {
+          _id: "$employeeId",
+          days: { $sum: { $ifNull: ["$lopDays", 0] } },
+        },
+      },
+    ]),
+  ]);
+
+  const map = new Map();
+  for (const r of fullLopRows) map.set(r._id, (map.get(r._id) ?? 0) + r.days);
+  for (const r of splitLopRows) map.set(r._id, (map.get(r._id) ?? 0) + r.days);
+  return map;
 }
 
 /**
@@ -62,7 +116,7 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
   const v = await computeSalaryViolations({ month, employeeId });
 
   const windowStart = v.windowInfo?.startDate ?? `${month}-01`;
-  const windowEnd   = v.windowInfo?.endDate   ?? dayjs.utc(`${month}-01`).endOf("month").format("YYYY-MM-DD");
+  const windowEnd = v.windowInfo?.endDate ?? dayjs.utc(`${month}-01`).endOf("month").format("YYYY-MM-DD");
 
   const release = await getRelease(month);
   const skipMap = {};
@@ -94,11 +148,18 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
       .lean();
   }
 
+  // ── Bulk LOP fetch — 2 aggregations instead of 2 queries per employee ──
+  const lopDaysMap = await getLopDaysForWindowBulk(
+    employees.map((e) => e.employeeId),
+    windowStart,
+    windowEnd,
+  );
+
   const result = [];
 
   for (const emp of employees) {
     const ctcMonthly = (emp.annualSalary ?? 0) / 12;
-    const breakdown  = calculateSalaryFromCTC(ctcMonthly);
+    const breakdown = calculateSalaryFromCTC(ctcMonthly);
 
     const empViol = byEmp[emp.employeeId];
     const allDays = empViol?.days ?? [];
@@ -125,7 +186,7 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
       }
     }
 
-    const lopDays = await getLopDaysForWindow(emp.employeeId, windowStart, windowEnd);
+    const lopDays = lopDaysMap.get(emp.employeeId) ?? 0;
 
     const empSt = stateMap[emp.employeeId] ?? {};
     const hasEmpState = Object.prototype.hasOwnProperty.call(stateMap, emp.employeeId);
@@ -160,30 +221,30 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
     }
 
     result.push({
-      employeeId:  emp.employeeId,
-      name:        `${emp.firstName} ${emp.lastName}`,
+      employeeId: emp.employeeId,
+      name: `${emp.firstName} ${emp.lastName}`,
       designation: emp.designation ?? "",
-      department:  emp.department ?? "",
-      email:       emp.officialEmail ?? "",
+      department: emp.department ?? "",
+      email: emp.officialEmail ?? "",
       annualSalary: emp.annualSalary ?? 0,
-      ctcMonthly:  Math.round(ctcMonthly * 100) / 100,
+      ctcMonthly: Math.round(ctcMonthly * 100) / 100,
 
       // Slip meta (exact template fields)
-      joiningDate:   emp.doj ? new Date(emp.doj).toISOString().split("T")[0] : "",
-      bankName:      emp.bankDetails?.bankName ?? "",
+      joiningDate: emp.doj ? new Date(emp.doj).toISOString().split("T")[0] : "",
+      bankName: emp.bankDetails?.bankName ?? "",
       accountNumber: emp.bankDetails?.accountNumber ?? "",
-      uanNo:         emp.bankDetails?.uanNumber ?? "",
-      pan:           emp.panNumber ?? "",
-      location:      emp.address?.city ?? "Chennai",
+      uanNo: emp.bankDetails?.uanNumber ?? "",
+      pan: emp.panNumber ?? "",
+      location: emp.address?.city ?? "Chennai",
 
       breakdown,         // full (un-prorated) component amounts
       pay,               // prorated earnings, deductions, worked days, net
 
       // Violations (with skip status so the UI can show/toggle)
       violations: allDays.map((d) => ({
-        id:        violationId(d),
-        date:      d.date,
-        isLate:    d.isLate,
+        id: violationId(d),
+        date: d.date,
+        isLate: d.isLate,
         lateByMinutes: d.lateByMinutes,
         isEarlyLogout: d.isEarlyLogout,
         earlyByMinutes: d.earlyByMinutes,
@@ -198,13 +259,13 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
       hasViolations: allDays.length > 0 || manualViolations.length > 0,
 
       // Stage 1 (released): HR-verified, in reports. Per-employee authoritative.
-      released:         hasEmpState ? !!empSt.released : !!release.released,
-      releasedAt:       empSt.releasedAt ?? release.releasedAt ?? null,
+      released: hasEmpState ? !!empSt.released : !!release.released,
+      releasedAt: empSt.releasedAt ?? release.releasedAt ?? null,
       // Stage 2 (published): employee can see their slip.
-      published:        !!empSt.published,
-      publishedAt:      empSt.publishedAt ?? null,
+      published: !!empSt.published,
+      publishedAt: empSt.publishedAt ?? null,
       manualWorkedDays: manualWorkedDays ?? null,
-      isManual:         manualWorkedDays != null,
+      isManual: manualWorkedDays != null,
 
       // HR-added manual violations
       manualViolations: manualViolations.map((mv) => ({
@@ -231,16 +292,16 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
       const snap = snapMap[r.employeeId];
       if (snap && r.released && snap.snapshot) {
         const f = snap.snapshot;
-        r.breakdown            = f.breakdown ?? r.breakdown;
-        r.pay                  = f.pay ?? r.pay;
-        r.violations           = f.violations ?? r.violations;
+        r.breakdown = f.breakdown ?? r.breakdown;
+        r.pay = f.pay ?? r.pay;
+        r.violations = f.violations ?? r.violations;
         r.activeViolationCount = f.activeViolationCount ?? r.activeViolationCount;
-        r.totalViolationCount  = f.totalViolationCount ?? r.totalViolationCount;
-        r.manualViolations     = f.manualViolations ?? r.manualViolations;
+        r.totalViolationCount = f.totalViolationCount ?? r.totalViolationCount;
+        r.manualViolations = f.manualViolations ?? r.manualViolations;
         r.manualViolationDayCost = f.manualViolationDayCost ?? r.manualViolationDayCost;
-        r.ctcMonthly           = f.ctcMonthly ?? r.ctcMonthly;
-        r.frozen               = true;
-        r.version              = snap.version;
+        r.ctcMonthly = f.ctcMonthly ?? r.ctcMonthly;
+        r.frozen = true;
+        r.version = snap.version;
       }
     }
   }
@@ -392,7 +453,7 @@ export const releasePayroll = async (req, res) => {
     } else {
       const allEmps = await Employee.find({ isActive: true }).select("employeeId").lean();
       targetIds = allEmps.map((e) => e.employeeId);
-      release.released   = true;
+      release.released = true;
       release.releasedAt = now;
       release.releasedBy = by;
     }

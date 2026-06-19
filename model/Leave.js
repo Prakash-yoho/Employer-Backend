@@ -184,6 +184,7 @@ leaveSchema.index({ employee: 1, status: 1 });
 leaveSchema.index({ status: 1 });
 leaveSchema.index({ startDate: 1, endDate: 1 });
 leaveSchema.index({ department: 1, status: 1 });
+leaveSchema.index({ employeeId: 1, status: 1, leaveType: 1, startDate: 1, endDate: 1 });
 leaveSchema.index({ createdAt: -1 });
 
 export default mongoose.model("Leave", leaveSchema);
