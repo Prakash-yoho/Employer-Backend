@@ -1,11 +1,11 @@
 import Employee from "../model/Employee.js";
 import Leave from "../model/Leave.js";
-import PayrollRelease from "../model/PayrollRelease.js";
-import PayslipHistory from "../model/PayslipHistory.js";
-import { computeSalaryViolations } from "./ViolationGracePolicyController.js";
-import { calculateSalaryFromCTC, computeWorkedDaysAndPay } from "../utils/salaryCalc.js";
+import PayrollRelease from "../model/Payrollrelease.js";
+import PayslipHistory from "../model/Paysliphistory.js";
+import { computeSalaryViolations } from "./Violationgracepolicycontroller.js";
+import { calculateSalaryFromCTC, computeWorkedDaysAndPay } from "../utils/Salarycalc.js";
 import { generatePayslip } from "../services/payslipService.js";
-import { generateSalaryViolationReport } from "../services/salaryViolationReportService.js";
+import { generateSalaryViolationReport } from "../services/Salaryviolationreportservice.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
