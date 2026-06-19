@@ -6,7 +6,7 @@ import Holiday from "../model/Holiday.js";
 import Leave from "../model/Leave.js";
 import { computeCycleWindow, getSalaryCycleStartDay } from "../utils/Salarycyclehelper.js";
 import { hhmmToMinutes, timeStrToMinutes } from "./Officetimingcontroller.js";
-import { generateSalaryViolationReport } from "../services/salaryViolationReportService.js";
+import { generateSalaryViolationReport } from "../services/Salaryviolationreportservice.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { getNow } from "../utils/trueTime.js";
