@@ -1,4 +1,4 @@
-import ViolationGracePolicy from "../model/ViolationGracePolicy.js";
+import ViolationGracePolicy from "../model/Violationgracepolicy.js";
 import Attendance from "../model/Attendance.js";
 import Employee from "../model/Employee.js";
 import OfficeTiming from "../model/Officetiming.js";
