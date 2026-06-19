@@ -1,4 +1,3 @@
-
 export const newAdminUserTemplate = (adminUser, plainPassword, role) => {
   const roleDisplay =
     role === 'EMPLOYER_HR' ? 'HR' :
@@ -445,18 +444,6 @@ export const appointmentLetterEmailTemplate = (employee) => {
 };
 
 
-
-
-
-
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STEP 3 OF 7
-// ADD THESE TWO FUNCTIONS to: utils/emailTemplates.js
-// (paste at the bottom of your existing emailTemplates.js file)
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
  * Relieving letter email template
  * Matches the same dark-teal + orange brand style as appointmentLetterEmailTemplate
@@ -595,136 +582,255 @@ const formatDate = (date) => {
 };
 
 
-
+/**
+ * Leave email template — redesigned to match the same dark-teal + orange
+ * brand identity as the other employee documents (appointment letter,
+ * relieving letter, experience certificate), instead of a solid color block.
+ * The status color is now used only as a small accent (badge, left border,
+ * button) rather than as a full background, which reads as far more
+ * professional in an inbox.
+ */
 export const leaveEmailTemplate = (type, data) => {
   let subject, title, message, details, actionText, actionUrl;
-
-  console.log(type, data, "Email Template");
+  let reasonLabel = null;
+  let reasonText = null;
 
   switch (type) {
     case 'REQUEST_TO_HR':
-      subject    = `New Leave Request - ${data.employeeName}`;
-      title      = 'New Leave Request';
-      message    = `${data.employeeName} has submitted a leave request`;
-      details    = `
-        <p><strong>Employee:</strong> ${data.employeeName}</p>
-        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-        <p><strong>Dates:</strong> ${formatDate(data.startDate)} – ${formatDate(data.endDate)}</p>
-        <p><strong>Reason:</strong> ${data.reason}</p>
-      `;
+      subject = `New Leave Request - ${data.employeeName}`;
+      title = 'New Leave Request';
+      message = `A new leave request has been submitted.`;
+
+      details = `
+  <p>
+    This is to inform you that <strong>${data.employeeName}</strong>
+    (${data.employeeId})
+    has submitted a request for <strong>${data.leaveType}</strong> leave
+    ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }.
+  </p>
+`;
+      reasonLabel = 'Reason for Leave';
+      reasonText = data.reason;
       actionText = 'Review Request';
-      actionUrl  = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
       break;
 
     case 'APPROVED_TO_EMPLOYEE':
-      subject    = `Leave Request Approved – ${data.requestId}`;
-      title      = 'Leave Approved ✅';
-      message    = 'Your leave request has been approved';
-      details    = `
-        <p><strong>Request ID:</strong> ${data.requestId}</p>
-        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-        <p><strong>Dates:</strong> ${formatDate(data.startDate)} – ${formatDate(data.endDate)}</p>
-      `;
+      subject = `Leave Approved – ${data.requestId}`;
+      title = 'Leave Approved';
+
+      message = `
+Hi <strong>${data.employeeName}</strong> (${data.employeeId}),
+`;;
+
+      details = `
+    <p>
+      This is to inform you that your <strong>${data.leaveType}</strong>
+      leave request has been approved
+      ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `for <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }.
+    </p>
+  `;
+
       actionText = 'View Details';
-      actionUrl  = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
       break;
 
     case 'REJECTED_TO_EMPLOYEE':
-      subject    = `Leave Request Update – ${data.requestId}`;
-      title      = 'Leave Not Approved';
-      message    = 'Your leave request requires attention';
-      details    = `
-        <p><strong>Request ID:</strong> ${data.requestId}</p>
-        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-        <p><strong>Dates:</strong> ${formatDate(data.startDate)} – ${formatDate(data.endDate)}</p>
-        <p><strong>Reason:</strong> ${data.rejectedComments || 'Please contact HR'}</p>
-      `;
+      subject = `Leave Request Update – ${data.requestId}`;
+      title = 'Leave Not Approved';
+
+      message = `
+    Hi <strong>${data.employeeName}</strong> (${data.employeeId}),
+  `;
+
+      details = `
+    <p>
+      This is to inform you that your <strong>${data.leaveType}</strong>
+      leave request
+      ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }
+      has not been approved.
+    </p>
+  `;
+
+      reasonLabel = 'Reason for Rejection';
+      reasonText = data.rejectedComments || 'Please contact HR for more information.';
+
       actionText = 'Apply Again';
-      actionUrl  = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
       break;
 
     case 'CANCELLED_TO_HR':
-      subject    = `Leave Cancelled – ${data.employeeName}`;
-      title      = data.wasApproved ? '⚠ Approved Leave Cancelled' : 'Leave Request Cancelled';
-      message    = data.wasApproved
-        ? `${data.employeeName} has cancelled a previously approved leave`
-        : `${data.employeeName} has cancelled their leave request`;
-      details    = `
-        <p><strong>Employee:</strong> ${data.employeeName}</p>
-        <p><strong>Request ID:</strong> ${data.requestId}</p>
-        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-        <p><strong>Dates:</strong> ${formatDate(data.startDate)} – ${formatDate(data.endDate)}</p>
-        <p><strong>Total Days:</strong> ${data.totalDays}</p>
-        ${data.wasApproved ? '<p style="color:#ef4444;"><strong>⚠ This leave was already approved. Please update payroll if needed.</strong></p>' : ''}
-      `;
+      subject = `Leave Cancelled – ${data.employeeName}`;
+      title = 'Leave Cancelled';
+
+      message = 'A leave request has been cancelled.';
+
+      details = `
+ <p>
+  This is to inform you that <strong>${data.employeeName}</strong>
+  ${data.employeeId ? `(<strong>${data.employeeId}</strong>)` : ''}
+  has cancelled their <strong>${data.leaveType}</strong> leave
+  ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }.
+</p>
+  `;
+
+      reasonLabel = 'Cancellation Reason';
+      reasonText = data.cancelReason || 'No reason provided.';
+
       actionText = 'View Leave Management';
-      actionUrl  = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
       break;
 
-    // ── NEW ────────────────────────────────────────────────────────────────────
     case 'CANCELLED_TO_EMPLOYEE':
-      subject    = `Leave Cancellation Confirmed – ${data.requestId}`;
-      title      = 'Leave Cancelled';
-      message    = data.wasApproved
-        ? 'Your previously approved leave has been cancelled'
-        : 'Your leave request has been cancelled successfully';
-      details    = `
-        <p><strong>Request ID:</strong> ${data.requestId}</p>
-        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-        <p><strong>Dates:</strong> ${formatDate(data.startDate)} – ${formatDate(data.endDate)}</p>
-        <p><strong>Total Days:</strong> ${data.totalDays}</p>
-        ${data.wasApproved && data.leaveType === 'Casual Leave'
-          ? `<p style="color:#10b981;"><strong>✓ Your CL balance has been restored.</strong></p>`
-          : ''}
-        ${data.wasApproved && data.leaveType !== 'Casual Leave'
-          ? `<p style="color:#10b981;"><strong>✓ Your leave quota has been restored.</strong></p>`
-          : ''}
-      `;
+      subject = `Leave Cancellation Confirmed – ${data.requestId}`;
+      title = 'Leave Cancelled';
+
+      message = 'Your leave cancellation has been processed successfully.';
+
+      details = `
+    <p>
+      Your <strong>${data.leaveType}</strong> leave
+      ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }
+      has been cancelled successfully.
+    </p>
+  `;
+
       actionText = 'View Leave History';
-      actionUrl  = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
       break;
   }
 
-  const color = type === 'APPROVED_TO_EMPLOYEE'  ? '#10b981'
-    : type === 'REJECTED_TO_EMPLOYEE'             ? '#ef4444'
-    : type === 'CANCELLED_TO_HR'                  ? '#ef4444'
-    : type === 'CANCELLED_TO_EMPLOYEE'            ? '#64748b'   // neutral slate — it's a confirmation, not alarming
-    : '#f59e0b';                                                 // REQUEST_TO_HR and fallback
+  // Accent color: used only for the status badge, the details left-border,
+  // and the button — never as a full-page background.
+  const accentColor = type === 'APPROVED_TO_EMPLOYEE' ? '#10b981'
+    : type === 'REJECTED_TO_EMPLOYEE' ? '#ef4444'
+      : type === 'CANCELLED_TO_HR' ? '#ef4444'
+        : type === 'CANCELLED_TO_EMPLOYEE' ? '#64748b'
+          : '#E05C1A';                                                 // REQUEST_TO_HR / fallback — brand orange
+
+  const badgeLabel = type === 'APPROVED_TO_EMPLOYEE' ? 'Approved'
+    : type === 'REJECTED_TO_EMPLOYEE' ? 'Action Needed'
+      : type === 'CANCELLED_TO_HR' ? 'Cancelled'
+        : type === 'CANCELLED_TO_EMPLOYEE' ? 'Cancelled'
+          : 'Pending Review';
+
+  const companyName = process.env.COMPANY_NAME || 'KIAQ Technologies Private Limited';
 
   return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body { font-family: Arial, sans-serif; background: #f5f7fa; margin: 0; padding: 20px; color: #333; line-height: 1.6; }
-    .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-    .header { background: ${color}; color: white; padding: 20px; text-align: center; }
-    .title { font-size: 22px; font-weight: bold; margin: 10px 0; }
-    .content { padding: 25px; }
-    .message-box { padding: 20px; border-radius: 6px; margin: 15px 0; background: ${color}; color: white; }
-    .message-box p { margin: 6px 0; }
-    .btn { display: inline-block; background: ${color}; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 15px 0; }
-    .footer { text-align: center; padding: 20px; background: #1e293b; color: #cbd5e1; font-size: 12px; }
+    body { margin: 0; padding: 0; background: #f4f4f4; font-family: Arial, Helvetica, sans-serif; color: #111111; }
+    .wrap { max-width: 600px; margin: 30px auto; background: #ffffff; border-radius: 8px; overflow: hidden; }
+    .top-bar { background: #002B38; padding: 20px 32px; }
+    .brand { font-size: 20px; font-weight: bold; color: #ffffff; }
+    .brand span { color: #E05C1A; }
+    .orange-line { height: 4px; background: #E05C1A; }
+    .body { padding: 32px; }
+    .badge {
+      display: inline-block; font-size: 11px; font-weight: bold; letter-spacing: .5px;
+      text-transform: uppercase; color: ${accentColor}; border: 1px solid ${accentColor};
+      border-radius: 4px; padding: 4px 10px; margin-bottom: 16px;
+    }
+    h2.title { font-size: 19px; color: #002B38; margin: 0 0 12px; }
+    p { font-size: 14px; line-height: 1.7; margin: 8px 0; color: #333333; }
+  .details {
+  padding: 0;
+  margin: 16px 0;
+  font-size: 14px;
+}
+    .details p { margin: 6px 0; }
+    .reason-block { margin: 18px 0 6px; }
+    .reason-label {
+  font-size: 18px;
+  font-weight: 900;
+  color: #002B38;
+  margin-bottom: 8px;
+}
+    }
+    .reason-text {
+      background: #fafafa; border: 1px solid #e8e8e8; border-radius: 4px;
+      padding: 14px 16px; margin: 0; font-size: 14px; line-height: 1.7;
+      color: #333333; white-space: pre-wrap;
+    }
+    .btn-wrap { margin: 26px 0 18px; }
+  .btn {
+  display: inline-block;
+  background: #E05C1A;
+  color: #ffffff !important;
+  padding: 12px 24px;
+  text-decoration: none !important;
+  border-radius: 6px;
+  font-weight: bold;
+  font-size: 14px;
+}
+    .note { font-size: 12px; color: #777777; font-style: italic; margin-top: 22px; }
+    .footer { background: #002B38; padding: 16px 32px; text-align: center; }
+    .footer p { color: #9aa7ad; font-size: 11px; margin: 0; line-height: 1.7; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <div class="title">${title}</div>
-      <div>${process.env.COMPANY_NAME || 'Leave Management'}</div>
-    </div>
-    <div class="content">
+  <div class="wrap">
+ 
+    <div class="body">
+
+    <h2 class="title">${title}</h2>
       <p>${message}</p>
-      <div class="message-box">${details}</div>
-      <center>
-        <a href="${actionUrl}" class="btn" target="_blank">${actionText}</a>
-      </center>
-      <p style="margin-top: 20px; font-size: 14px; color: #64748b;">
-        This is an automated message. Please do not reply.
-      </p>
+      <div class="details">${details}</div>
+      ${reasonText ? `
+      <div class="reason-block">
+<div class="reason-label">
+  <strong>${reasonLabel}</strong>
+</div>
+        <p class="reason-text">${reasonText}</p>
+      </div>` : ''}
+      <div class="btn-wrap">
+<a
+  href="${actionUrl}"
+  target="_blank"
+  style="
+    background:#E05C1A;
+    color:#ffffff;
+    text-decoration:none;
+    padding:12px 24px;
+    border-radius:6px;
+    display:inline-block;
+    font-weight:bold;
+  "
+>
+  ${actionText}
+</a>
+      </div>
+<div
+  style="
+    margin-top:30px;
+    text-align:center;
+    color:#666666;
+    font-size:13px;
+    font-style:italic;
+  "
+>
+  This is an automated message. Please do not reply.
+</div>
     </div>
-    <div class="footer">${process.env.COMPANY_NAME || 'Leave Management System'} &mdash; Automated Notification</div>
   </div>
 </body>
 </html>

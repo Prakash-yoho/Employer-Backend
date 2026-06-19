@@ -547,7 +547,7 @@ export const updateLeaveStatus = async (req, res) => {
         const isPastLeave = dayjs.utc(leave.startDate).startOf('day').isBefore(dayjs.utc().startOf('day'));
         const updated = status === 'APPROVED' ? await leave.approve(req.user._id, comments) : await leave.reject(req.user._id, comments);
 
-        const emp = await Employee.findById(leave.employee).select('firstName lastName personalEmail').lean();
+        const emp = await Employee.findById(leave.employee).select('firstName lastName officialEmail').lean();
         if (emp) {
             await Notification.create({
                 title: `Leave ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
@@ -555,12 +555,12 @@ export const updateLeaveStatus = async (req, res) => {
                 type: status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
                 recipientType: 'EMPLOYEE', recipientId: leave.employee, recipientModel: 'Employee',
                 senderId: req.user._id, senderModel: 'EmployerUser',
-                relatedEntityType: 'Leave', relatedEntityId: leave._id,
+                relatedEntityType: 'Leave', relatedEntityId: leave._id,  
                 status: 'unread', priority: 'medium',
             });
             setTimeout(async () => {
                 await sendMail({
-                    to: emp.personalEmail,
+                    to: emp.officialEmail,
                     subject: `Leave ${status === 'APPROVED' ? 'Approved' : 'Rejected'} — ${updated.requestId}`,
                     html: leaveEmailTemplate(status === 'APPROVED' ? 'APPROVED_TO_EMPLOYEE' : 'REJECTED_TO_EMPLOYEE', leave),
                 });
