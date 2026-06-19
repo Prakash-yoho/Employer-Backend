@@ -22,7 +22,7 @@ import {
   getMonthPayslipHistory,
   downloadHistoricalPayslip,
   downloadHistoricalViolationReport,
-} from "../controllers/payrollController.js";
+} from "../controllers/Payrollcontroller.js";
 
 const router = express.Router();
 
