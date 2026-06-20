@@ -4,7 +4,19 @@ export const getDefaultDocuments = (req, res) => {
   const documents = [
       {
         name: "Hr Policy",
-        url: `${baseUrl}/public/docs/HR POLICY.pdf`,
+        url: `${baseUrl}/public/docs/KIAQ_HR_Policy.pdf`,
+      },
+      {
+        name: "Attendance and Dresscode Policy",
+        url: `${baseUrl}/public/docs/Attendance_DressCode_Policy_Kiaq.pdf`,
+      },
+      {
+        name: "Laptop usage policy",
+        url: `${baseUrl}/public/docs/Kiaq_Laptop_Usage_Policy.pdf`,
+      },
+      {
+        name: "Workplace Policy",
+        url: `${baseUrl}/public/docs/KIAQ_Workplace_Policy.pdf`,
       },
       {
         name: "Posh",
