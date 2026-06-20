@@ -211,11 +211,11 @@ export const createEmployee = async (req, res) => {
         await employee.save();
 
         // Send welcome email
-        if (employee.personalEmail) {
+        if (employee.officialEmail) {
             setTimeout(async () => {
                 try {
                     await sendMail({
-                        to: employee.personalEmail,
+                        to: employee.officialEmail,
                         subject: `Welcome to ${process.env.COMPANY_NAME} - Employee Portal Access`,
                         html: newEmployeeTemplate(
                             employee,
