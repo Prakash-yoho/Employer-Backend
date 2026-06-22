@@ -19,7 +19,7 @@ const fileFilter = (req, file, cb) => {
     if (allowedExtensions.includes(ext) && allowedMimeTypes.includes(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(new Error('Only PDF, JPG, JPEG, and PNG files are allowed'), false);
+        cb(new Error('Only PDF files are allowed'), false);
     }
 };
 

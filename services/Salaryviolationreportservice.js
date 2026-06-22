@@ -127,24 +127,24 @@ export const generateSalaryViolationReport = (payload) => {
       currentY = doc.y + 12;
 
       // ── Policy reference (explanation of thresholds) ─────────────────────────
-      doc.font('Helvetica-Bold').fontSize(10).fillColor('#002B38')
-        .text('Applied Thresholds', leftMargin, currentY);
-      currentY = doc.y + 6;
+      // doc.font('Helvetica-Bold').fontSize(10).fillColor('#002B38')
+      //   .text('Applied Thresholds', leftMargin, currentY);
+      // currentY = doc.y + 6;
 
-      doc.font('Helvetica').fontSize(9).fillColor('#333333');
-      const bg = gracePolicy.breakGrace ?? {};
-      const policyLines = [
-        `Office hours: ${officeTiming.startTime ?? '—'} to ${officeTiming.endTime ?? '—'}.`,
-        `Late login grace: ${gracePolicy.loginGraceMinutes ?? 0} min after start time before a salary violation applies.`,
-        `Early logout grace: ${gracePolicy.logoutGraceMinutes ?? 0} min before end time before a salary violation applies.`,
-        `Break grace (over allowed): Morning ${bg.MORNING ?? 0}m, Lunch ${bg.LUNCH ?? 0}m, Evening ${bg.EVENING ?? 0}m.`,
-        `"Late By" / "Early By" are measured from the office start / end time. Grace decides whether each event is counted as a violation.`,
-      ];
-      policyLines.forEach((line) => {
-        doc.text(`•  ${line}`, leftMargin, currentY, { width: contentWidth, align: 'left' });
-        currentY = doc.y + 3;
-      });
-      currentY = doc.y + 10;
+      // doc.font('Helvetica').fontSize(9).fillColor('#333333');
+      // const bg = gracePolicy.breakGrace ?? {};
+      // const policyLines = [
+      //   `Office hours: ${officeTiming.startTime ?? '—'} to ${officeTiming.endTime ?? '—'}.`,
+      //   `Late login grace: ${gracePolicy.loginGraceMinutes ?? 0} min after start time before a salary violation applies.`,
+      //   `Early logout grace: ${gracePolicy.logoutGraceMinutes ?? 0} min before end time before a salary violation applies.`,
+      //   `Break grace (over allowed): Morning ${bg.MORNING ?? 0}m, Lunch ${bg.LUNCH ?? 0}m, Evening ${bg.EVENING ?? 0}m.`,
+      //   `"Late By" / "Early By" are measured from the office start / end time. Grace decides whether each event is counted as a violation.`,
+      // ];
+      // policyLines.forEach((line) => {
+      //   doc.text(`•  ${line}`, leftMargin, currentY, { width: contentWidth, align: 'left' });
+      //   currentY = doc.y + 3;
+      // });
+      // currentY = doc.y + 10;
 
       // ── Summary block ────────────────────────────────────────────────────────
       doc.font('Helvetica-Bold').fontSize(10).fillColor('#002B38')
