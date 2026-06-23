@@ -8,6 +8,8 @@ import Employee from '../model/Employee.js';
 import EmployerUser from '../model/EmployerUser.js';
 import Notification from '../model/Notification.js';
 import LeavePolicy from '../model/LeavePolicy.js';
+import { sendMail } from '../utils/mailer.js';
+import { permissionEmailTemplate } from '../utils/emailTemplates.js';
 import { validate, sanitize, fmtStatus, toUTC, toStr, paginate } from './leaveController.js';
 import {
     createPermissionValidation,
@@ -21,21 +23,23 @@ dayjs.extend(utc);
 // ─── Format helper ────────────────────────────────────────────────────────────
 
 const fmtPerm = (p) => ({
-    id:               p._id,
-    requestId:        p.requestId,
-    employeeName:     p.employeeName,
-    employeeId:       p.employeeId,
-    department:       p.department,
-    date:             toStr(p.date),
-    fromTime:         p.fromTime,
-    toTime:           p.toTime,
-    durationHours:    p.durationHours,
-    durationText:     p.durationText,
-    reason:           p.reason,
-    status:           fmtStatus(p.status),
-    appliedAt:        p.appliedAt,
+    id: p._id,
+    requestId: p.requestId,
+    employeeName: p.employeeName,
+    employeeId: p.employeeId,
+    department: p.department,
+    date: toStr(p.date),
+    fromTime: p.fromTime,
+    toTime: p.toTime,
+    durationHours: p.durationHours,
+    durationText: p.durationText,
+    reason: p.reason,
+    status: fmtStatus(p.status),
+    appliedAt: p.appliedAt,
     approvedComments: p.approvedComments,
     rejectedComments: p.rejectedComments,
+    cancelReason: p.cancelReason,
+    cancelledAt: p.cancelledAt,
 });
 
 // ─── EMPLOYEE: Apply permission ───────────────────────────────────────────────
@@ -54,29 +58,29 @@ export const createPermissionRequest = async (req, res) => {
         if (totalMins > 60) return res.status(400).json({ success: false, message: 'Max 1 hour per permission request' });
 
         const durationHours = +(totalMins / 60).toFixed(4);
-        const durationText  = [
+        const durationText = [
             Math.floor(totalMins / 60) > 0 ? `${Math.floor(totalMins / 60)}h` : '',
-            totalMins % 60 > 0             ? `${totalMins % 60}min`           : '',
+            totalMins % 60 > 0 ? `${totalMins % 60}min` : '',
         ].filter(Boolean).join(' ');
 
-        const policy       = await LeavePolicy.findOne({ isActive: true }).lean();
+        const policy = await LeavePolicy.findOne({ isActive: true }).lean();
         const maxPermHours = policy?.permissionLeave?.hoursPerMonth ?? 2;
-        const sDay         = policy?.salaryCycle?.startDay ?? 21;
+        const sDay = policy?.salaryCycle?.startDay ?? 21;
 
-        const reqDate    = toUTC(date);
-        const refD       = dayjs.utc(reqDate);
+        const reqDate = toUTC(date);
+        const refD = dayjs.utc(reqDate);
         const cycleStart = refD.date() >= sDay
             ? refD.date(sDay).startOf('day')
             : refD.subtract(1, 'month').date(sDay).startOf('day');
-        const cycleEnd   = cycleStart.add(1, 'month').subtract(1, 'day').endOf('day');
+        const cycleEnd = cycleStart.add(1, 'month').subtract(1, 'day').endOf('day');
 
         const existing = await Permission.find({
             employee: req.user._id,
-            date:     { $gte: cycleStart.toDate(), $lte: cycleEnd.toDate() },
-            status:   { $in: ['PENDING', 'APPROVED'] },
+            date: { $gte: cycleStart.toDate(), $lte: cycleEnd.toDate() },
+            status: { $in: ['PENDING', 'APPROVED'] },
         }).lean();
 
-        const usedHours      = +existing.reduce((s, p) => s + (p.durationHours || 0), 0).toFixed(2);
+        const usedHours = +existing.reduce((s, p) => s + (p.durationHours || 0), 0).toFixed(2);
         const remainingHours = +(maxPermHours - usedHours).toFixed(2);
 
         if (remainingHours <= 0)
@@ -98,25 +102,41 @@ export const createPermissionRequest = async (req, res) => {
             .select('employeeId firstName lastName department designation officialEmail').lean();
         if (!emp) return res.status(404).json({ success: false, message: 'Employee not found' });
 
-        const requestId  = await Permission.generateRequestId();
+        const requestId = await Permission.generateRequestId();
         const permission = new Permission({
             requestId,
-            employee:     req.user._id,
-            employeeId:   emp.employeeId,
+            employee: req.user._id,
+            employeeId: emp.employeeId,
             employeeName: `${emp.firstName} ${emp.lastName}`,
-            department:   emp.department,
-            designation:  emp.designation,
-            date:         reqDate,
-            fromTime,     toTime,
+            department: emp.department,
+            designation: emp.designation,
+            date: reqDate,
+            fromTime, toTime,
             durationHours, durationText,
-            reason:       sanitize(reason),
+            reason: sanitize(reason),
         });
         await permission.save();
+
+        // ── Email HR ─────────────────────────────────────────────────────────
+        sendMail({
+            to: process.env.LEAVECREATEMAILID,
+            subject: `New Permission Request - ${emp.firstName} ${emp.lastName} (${permission.requestId})`,
+            html: permissionEmailTemplate('REQUEST_TO_HR', {
+                employeeName: `${emp.firstName} ${emp.lastName}`,
+                employeeId: emp.employeeId,
+                requestId: permission.requestId,
+                date: permission.date,
+                fromTime,
+                toTime,
+                durationText,
+                reason: sanitize(reason),
+            }),
+        }).catch(err => console.error('Error sending permission request email:', err));
 
         const hrAdmins = await EmployerUser.find({ role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] }, isActive: true });
         for (const hr of hrAdmins) {
             await Notification.create({
-                title:       'New Permission Request',
+                title: 'New Permission Request',
                 description: `${emp.firstName} ${emp.lastName} — ${dayjs.utc(reqDate).format('DD MMM')} ${fromTime}–${toTime}`,
                 type: 'LEAVE_REQUEST', recipientType: hr.role, recipientId: hr._id, recipientModel: 'EmployerUser',
                 senderId: req.user._id, senderModel: 'Employee',
@@ -130,13 +150,13 @@ export const createPermissionRequest = async (req, res) => {
             success: true,
             message: `Permission submitted (${totalMins}min). ${Math.round((maxPermHours - usedAfter) * 60)}min remaining this cycle.`,
             data: {
-                requestId:          permission.requestId,
-                date:               toStr(permission.date),
-                fromTime,           toTime,
-                duration:           durationText,
-                usedThisCycle:      usedAfter,
+                requestId: permission.requestId,
+                date: toStr(permission.date),
+                fromTime, toTime,
+                duration: durationText,
+                usedThisCycle: usedAfter,
                 remainingThisCycle: +(maxPermHours - usedAfter).toFixed(2),
-                status:             'Pending',
+                status: 'Pending',
             },
         });
     } catch (err) {
@@ -149,7 +169,7 @@ export const createPermissionRequest = async (req, res) => {
 
 export const getMyPermissions = async (req, res) => {
     try {
-        const page  = parseInt(req.query.page)  || 1;
+        const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const [perms, total] = await Promise.all([
             Permission.find({ employee: req.user._id }).sort({ appliedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
@@ -161,14 +181,67 @@ export const getMyPermissions = async (req, res) => {
     }
 };
 
+// ─── EMPLOYEE: Cancel permission (soft-delete + reason + email) ───────────────
+
 export const cancelPermissionRequest = async (req, res) => {
     try {
         const p = await Permission.findOne({ requestId: req.params.requestId, employee: req.user._id });
         if (!p) return res.status(404).json({ success: false, message: 'Not found' });
-        if (p.status !== 'PENDING') return res.status(400).json({ success: false, message: `Cannot cancel a ${p.status.toLowerCase()} permission` });
-        await p.deleteOne();
-        return res.json({ success: true, message: 'Permission cancelled' });
+        if (p.status !== 'PENDING')
+            return res.status(400).json({ success: false, message: `Cannot cancel a ${p.status.toLowerCase()} permission` });
+
+        // ── Validate cancel reason (compulsory, min 10 / max 500 chars) ──────
+        const cancelReason = sanitize(req.body?.cancelReason ?? '');
+        if (!cancelReason)
+            return res.status(400).json({ success: false, message: 'Cancellation reason is required' });
+        if (cancelReason.length < 10)
+            return res.status(400).json({ success: false, message: 'Cancellation reason must be at least 10 characters' });
+        if (cancelReason.length > 500)
+            return res.status(400).json({ success: false, message: 'Cancellation reason cannot exceed 500 characters' });
+
+        p.status = 'CANCELLED';
+        p.cancelledAt = new Date();
+        p.cancelledByEmployee = true;
+        p.cancelReason = cancelReason;
+        await p.save();
+
+        // ── Email HR ─────────────────────────────────────────────────────────
+        sendMail({
+            to: process.env.LEAVECREATEMAILID,
+            subject: `Permission Cancelled – ${p.employeeName} (${p.requestId})`,
+            html: permissionEmailTemplate('CANCELLED_TO_HR', {
+                employeeName: p.employeeName,
+                employeeId: p.employeeId,
+                requestId: p.requestId,
+                date: p.date,
+                fromTime: p.fromTime,
+                toTime: p.toTime,
+                durationText: p.durationText,
+                cancelReason: p.cancelReason,
+            }),
+        }).catch(err => console.error('Error sending permission cancel email:', err));
+
+        // ── Notify HR admins ─────────────────────────────────────────────────
+        const hrAdmins = await EmployerUser.find({ role: { $in: ['EMPLOYER_HR', 'EMPLOYER_ADMIN'] }, isActive: true });
+        for (const hr of hrAdmins) {
+            await Notification.create({
+                title: 'Permission Cancelled',
+                description: `${p.employeeName} cancelled permission (${p.requestId})`,
+                type: 'LEAVE_CANCELLED',
+                recipientType: hr.role, recipientId: hr._id, recipientModel: 'EmployerUser',
+                senderId: req.user._id, senderModel: 'Employee',
+                relatedEntityType: 'Permission', relatedEntityId: p._id,
+                status: 'unread', priority: 'low',
+            });
+        }
+
+        return res.json({
+            success: true,
+            message: 'Permission cancelled. HR notified.',
+            data: { requestId: p.requestId, status: fmtStatus(p.status) },
+        });
     } catch (err) {
+        console.error('cancelPermissionRequest error:', err);
         return res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -178,9 +251,9 @@ export const cancelPermissionRequest = async (req, res) => {
 export const getAllPermissions = async (req, res) => {
     try {
         const status = req.query.status || 'ALL';
-        const page   = parseInt(req.query.page)  || 1;
-        const limit  = parseInt(req.query.limit) || 10;
-        const q      = status !== 'ALL' ? { status } : {};
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const q = status !== 'ALL' ? { status } : {};
         const [perms, total] = await Promise.all([
             Permission.find(q).sort({ appliedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
             Permission.countDocuments(q),
@@ -208,8 +281,9 @@ export const updatePermissionStatus = async (req, res) => {
         }
         await p.save();
 
+        // ── Notification to employee ─────────────────────────────────────────
         await Notification.create({
-            title:       `Permission ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
+            title: `Permission ${status === 'APPROVED' ? 'Approved' : 'Rejected'}`,
             description: `Your permission (${p.requestId}) has been ${status.toLowerCase()}.`,
             type: status === 'APPROVED' ? 'LEAVE_APPROVED' : 'LEAVE_REJECTED',
             recipientType: 'EMPLOYEE', recipientId: p.employee, recipientModel: 'Employee',
@@ -217,6 +291,37 @@ export const updatePermissionStatus = async (req, res) => {
             relatedEntityType: 'Permission', relatedEntityId: p._id,
             status: 'unread', priority: 'low',
         });
+
+        // ── Email to employee ────────────────────────────────────────────────
+        const emp = await Employee.findById(p.employee)
+            .select('firstName lastName officialEmail employeeId').lean();
+
+        if (emp?.officialEmail) {
+            setTimeout(async () => {
+                try {
+                    await sendMail({
+                        to: emp.officialEmail,
+                        subject: `Permission ${status === 'APPROVED' ? 'Approved' : 'Rejected'} — ${p.requestId}`,
+                        html: permissionEmailTemplate(
+                            status === 'APPROVED' ? 'APPROVED_TO_EMPLOYEE' : 'REJECTED_TO_EMPLOYEE',
+                            {
+                                employeeName: `${emp.firstName} ${emp.lastName}`,
+                                employeeId: emp.employeeId,
+                                requestId: p.requestId,
+                                date: p.date,
+                                fromTime: p.fromTime,
+                                toTime: p.toTime,
+                                durationText: p.durationText,
+                                approvedComments: p.approvedComments,
+                                rejectedComments: p.rejectedComments,
+                            },
+                        ),
+                    });
+                } catch (err) {
+                    console.error('Error sending permission status email:', err);
+                }
+            }, 2000);
+        }
 
         return res.json({ success: true, message: `Permission ${status.toLowerCase()}`, data: { requestId: p.requestId, status: fmtStatus(status) } });
     } catch (err) {

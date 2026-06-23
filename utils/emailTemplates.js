@@ -838,6 +838,145 @@ Hi <strong>${data.employeeName}</strong> (${data.employeeId}),
 };
 
 
+export const permissionEmailTemplate = (type, data) => {
+  let subject, title, message, details, actionText, actionUrl;
+  let reasonLabel = null;
+  let reasonText = null;
+
+  switch (type) {
+    case 'REQUEST_TO_HR':
+      subject = `New Permission Request - ${data.employeeName}`;
+      title   = 'New Permission Request';
+      message = 'A new permission request has been submitted.';
+      details = `
+        <p>
+          This is to inform you that <strong>${data.employeeName}</strong>
+          (${data.employeeId})
+          has submitted a permission request on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>
+          (<strong>${data.durationText}</strong>).
+        </p>
+      `;
+      reasonLabel = 'Reason for Permission';
+      reasonText  = data.reason;
+      actionText  = 'Review Request';
+      actionUrl   = `${process.env.FRONTEND_EMPLOYER_HR}/permissions`;
+      break;
+
+    case 'APPROVED_TO_EMPLOYEE':
+      subject = `Permission Approved – ${data.requestId}`;
+      title   = 'Permission Approved';
+      message = `Hi <strong>${data.employeeName}</strong> (${data.employeeId}),`;
+      details = `
+        <p>
+          This is to inform you that your permission request on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>
+          (<strong>${data.durationText}</strong>) has been approved.
+        </p>
+      `;
+      if (data.approvedComments) {
+        reasonLabel = 'HR Comment';
+        reasonText  = data.approvedComments;
+      }
+      actionText = 'View Details';
+      actionUrl  = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/permissions-management`;
+      break;
+
+    case 'REJECTED_TO_EMPLOYEE':
+      subject = `Permission Request Update – ${data.requestId}`;
+      title   = 'Permission Not Approved';
+      message = `Hi <strong>${data.employeeName}</strong> (${data.employeeId}),`;
+      details = `
+        <p>
+          This is to inform you that your permission request on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>
+          has not been approved.
+        </p>
+      `;
+      reasonLabel = 'Reason for Rejection';
+      reasonText  = data.rejectedComments || 'Please contact HR for more information.';
+      actionText  = 'Apply Again';
+      actionUrl   = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/permissions-management`;
+      break;
+
+    case 'CANCELLED_TO_HR':
+      subject = `Permission Cancelled – ${data.employeeName}`;
+      title   = 'Permission Cancelled';
+      message = 'A permission request has been cancelled.';
+      details = `
+        <p>
+          This is to inform you that <strong>${data.employeeName}</strong>
+          ${data.employeeId ? `(<strong>${data.employeeId}</strong>)` : ''}
+          has cancelled their permission on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>.
+        </p>
+      `;
+      reasonLabel = 'Cancellation Reason';
+      reasonText  = data.cancelReason || 'No reason provided.';
+      actionText  = 'View Permissions';
+      actionUrl   = `${process.env.FRONTEND_EMPLOYER_HR}/permissions`;
+      break;
+  }
+
+  const accentColor = type === 'APPROVED_TO_EMPLOYEE' ? '#10b981'
+    : type === 'REJECTED_TO_EMPLOYEE' ? '#ef4444'
+      : type === 'CANCELLED_TO_HR' ? '#ef4444'
+        : '#E05C1A';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin:0; padding:0; background:#f4f4f4; font-family:Arial,Helvetica,sans-serif; color:#111; }
+    .wrap { max-width:600px; margin:30px auto; background:#fff; border-radius:8px; overflow:hidden; }
+    .body { padding:32px; }
+    h2.title { font-size:19px; color:#002B38; margin:0 0 12px; }
+    p { font-size:14px; line-height:1.7; margin:8px 0; color:#333; }
+    .details { padding:0; margin:16px 0; font-size:14px; }
+    .reason-block { margin:18px 0 6px; }
+    .reason-label { font-size:18px; font-weight:900; color:#002B38; margin-bottom:8px; }
+    .reason-text {
+      background:#fafafa; border:1px solid #e8e8e8; border-radius:4px;
+      padding:14px 16px; margin:0; font-size:14px; line-height:1.7;
+      color:#333; white-space:pre-wrap;
+    }
+    .btn-wrap { margin:26px 0 18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="body">
+      <h2 class="title">${title}</h2>
+      <p>${message}</p>
+      <div class="details">${details}</div>
+      ${reasonText ? `
+      <div class="reason-block">
+        <div class="reason-label"><strong>${reasonLabel}</strong></div>
+        <p class="reason-text">${reasonText}</p>
+      </div>` : ''}
+      <div class="btn-wrap">
+        <a href="${actionUrl}" target="_blank"
+           style="background:${accentColor};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;display:inline-block;font-weight:bold;">
+          ${actionText}
+        </a>
+      </div>
+      <div style="margin-top:30px;text-align:center;color:#666;font-size:13px;font-style:italic;">
+        This is an automated message. Please do not reply.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+`;
+};
+
 
 export const passwordChangedByAdminTemplate = (employee, newPassword) => {
   const companyName = process.env.COMPANY_NAME || 'Company';
