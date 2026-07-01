@@ -1,13 +1,6 @@
 import express from 'express'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
-// import jobRoutes from './routes/jobRoutes.js'
-// import userRoutes from './routes/userRoutes.js'
-// import otpRoutes from './routes/otpRoutes.js'
-// import applicationRoutes from './routes/applicationRoutes.js'
-// import dashboardRoutes from './routes/dashboardRoutes.js'
-// import adminRoutes from './routes/adminRoutes.js'
-// import resumeRoutes from './routes/resumeRoutes.js'
 import employerRoutes from './routes/employerUserRoutes.js'
 import employeeRoutes from './routes/employeeRoutes.js'
 import documentRoutes from './routes/documentRoutes.js'
@@ -32,16 +25,16 @@ import defaultDocsRoutes from './routes/defaultDocsRoutes.js'
 import attendanceRoutes from './routes/attendanceRoutes.js'
 import breakPolicyRoutes from "./routes/breakPolicyRoutes.js"
 import Violationgracepolicyroutes from "./routes/Violationgracepolicyroutes.js"
-
 import announcementRoutes from './routes/announcementRoutes.js'
 import payrollRoutes from "./routes/payrollRoutes.js";
 import "./cron/midnightSweep.js";
-
 import { syncTrueTime } from './utils/trueTime.js';
 import { getTimeStatus } from './utils/trueTime.js';
 
-dotenv.config()
+// ✅ Appraisal effective-date cron
+import { applyEffectiveAppraisals } from './cron/appraisalEffectiveJob.js';
 
+dotenv.config()
 connectDB()
 
 const PORT = process.env.PORT || 5000
@@ -65,16 +58,13 @@ app.use(cors({
     credentials: true,
 }));
 
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
 
 app.use("/public", express.static("public"));
 app.use("/api", defaultDocsRoutes);
 
 app.get("/api/attendance/time-status", (req, res) => res.json(getTimeStatus()));
-
 
 // Employer Routes
 app.use("/api/employer", employerRoutes);
@@ -95,15 +85,14 @@ app.use('/api/employer/dashboard', dashboardHRAdminRoutes);
 app.use('/api/it-dashboard', itDashboardRoutes);
 app.use('/api/employee/dashboard', employeeDashboardRoutes);
 app.use('/api/phases-schedules', PhaseScheduleRoutes);
-app.use("/api/projects",projectRoutes)
-app.use("/api/announcements",announcementRoutes)
+app.use("/api/projects", projectRoutes)
+app.use("/api/announcements", announcementRoutes)
 app.use("/api/salaryviolations", Violationgracepolicyroutes);
 app.use("/api/payslips", payrollRoutes);
 
 // ─── CRON JOBS ────────────────────────────────────────────────────────────────
 
 // Sync server clock with authoritative time API on startup, then every hour.
-// Protects clock-in/out timestamps from local clock tampering or drift.
 syncTrueTime();
 cron.schedule("0 * * * *", () => {
     console.log("[CRON] Running syncTrueTime...");
@@ -121,6 +110,13 @@ cron.schedule("0 0 * * *", () => {
 cron.schedule("0 8 * * *", () => {
     console.log("[CRON] Running sendScheduleExpiryReminders...");
     sendScheduleExpiryReminders();
+});
+
+// ✅ Runs every day at 00:05 IST — applies salary appraisals whose effectiveDate has arrived
+cron.schedule("5 0 * * *", () => {
+    applyEffectiveAppraisals();
+}, {
+    timezone: "Asia/Kolkata",
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

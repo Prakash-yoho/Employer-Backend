@@ -175,37 +175,28 @@ const emergencyContactSchema = new Schema({
 
 // In model/Employee.js — add this schema near the top, with the other sub-schemas
 
+// In model/Employee.js — update appraisalSchema
+
 const appraisalSchema = new Schema({
-    previousAnnualSalary: {
-        type: Number,
-        required: true
-    },
-    newAnnualSalary: {
-        type: Number,
-        required: true
-    },
-    percentageIncrement: {
-        type: Number,
-        required: true
-    },
-    effectiveDate: {
-        type: Date,
-        required: true
-    },
-    letterDate: {
-        type: Date,
-        default: Date.now
-    },
+    previousAnnualSalary: { type: Number, required: true },
+    newAnnualSalary: { type: Number, required: true },
+    percentageIncrement: { type: Number, required: true },
+    effectiveDate: { type: Date, required: true },
+    letterDate: { type: Date, default: Date.now },
     refNo: String,
-    designation: String,      // designation at time of appraisal (in case it changes later)
+    designation: String,
     department: String,
     url: { type: String },
     fileName: { type: String },
     sentAt: { type: Date, default: Date.now },
+
+    // ✅ false until cron applies it on effectiveDate
+    isEffective: { type: Boolean, default: false },
+
     generatedBy: {
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser' },
-        userEmail: String
-    }
+        userEmail: String,
+    },
 }, { timestamps: true });
 
 // Main Employee Schema
@@ -285,9 +276,9 @@ const employeeSchema = new Schema({
         match: [/^\S+@\S+\.\S+$/, "Invalid email format"]
     },
     doj: {
-    type: Date,
-    // required: true
-},
+        type: Date,
+        // required: true
+    },
     officialPassword: {
         type: String,
         required: true

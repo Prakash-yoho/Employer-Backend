@@ -1819,7 +1819,16 @@ export const sendAppraisalLetter = async (req, res) => {
         const url = await saveAppraisalLetterInS3(pdfBuffer, fullName);
         const fileName = `${fullName}_AppraisalLetter_${Date.now()}_Kiaq.pdf`;
 
-        // 3. Build the appraisal record
+        // 3. Check if effectiveDate is today or already past → apply salary immediately
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const effective = new Date(effectiveDate);
+        effective.setHours(0, 0, 0, 0);
+
+        const applyNow = effective <= today;
+
+        // 4. Build the appraisal record
         const appraisalEntry = {
             previousAnnualSalary,
             newAnnualSalary,
@@ -1832,23 +1841,36 @@ export const sendAppraisalLetter = async (req, res) => {
             url,
             fileName,
             sentAt: new Date(),
+            // true  → salary applied right now
+            // false → cron will apply it on effectiveDate at 00:05 IST
+            isEffective: applyNow,
             generatedBy: { userId: req.user._id, userEmail: req.user.email },
         };
 
-        // 4. Push to appraisals[] AND update current annualSalary
+        // 5. Push appraisal entry; only update annualSalary if applyNow
         await Employee.updateOne(
             { _id: employee._id },
             {
                 $push: { appraisals: appraisalEntry },
-                $set: { annualSalary: newAnnualSalary, lastUpdatedAt: new Date(), lastUpdatedBy: req.user._id },
+                $set: {
+                    lastUpdatedAt: new Date(),
+                    lastUpdatedBy: req.user._id,
+                    ...(applyNow && { annualSalary: newAnnualSalary }),
+                },
             }
         );
 
-        // 5. Send email
+        console.log(
+            applyNow
+                ? `[Appraisal] Salary applied immediately for ${employee.employeeId} → ${newAnnualSalary}`
+                : `[Appraisal] Salary scheduled on ${effectiveDate} via cron for ${employee.employeeId}`
+        );
+
+        // 6. Send email
         let emailSent = false;
         try {
             await SendMailJet({
-                to: employee.personalEmail || employee.officialEmail,
+                to:  employee.officialEmail || employee.personalEmail,
                 subject: `Appraisal Letter – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
                 html: appraisalLetterEmailTemplate(employee, appraisalEntry),
                 attachments: [{
@@ -1871,6 +1893,7 @@ export const sendAppraisalLetter = async (req, res) => {
                 appraisal: appraisalEntry,
                 employee: updatedEmployee,
                 emailSent,
+                salaryApplied: applyNow,
             },
         });
     } catch (error) {

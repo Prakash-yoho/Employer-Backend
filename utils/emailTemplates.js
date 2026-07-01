@@ -1084,6 +1084,14 @@ export const passwordChangedByAdminTemplate = (employee, newPassword) => {
 // add to utils/emailTemplates.js
 
 export const appraisalLetterEmailTemplate = (employee, appraisal) => {
+  const formattedPrevious = Number(appraisal.previousAnnualSalary).toLocaleString('en-IN');
+  const formattedNew      = Number(appraisal.newAnnualSalary).toLocaleString('en-IN');
+  const increment         = Number(appraisal.percentageIncrement).toFixed(2);
+  const effectiveDate     = new Date(appraisal.effectiveDate).toLocaleDateString('en-GB', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  });
+  const companyName = process.env.COMPANY_NAME || 'Kiaq Technologies Private Limited';
+
   return `
 <!DOCTYPE html>
 <html>
@@ -1091,61 +1099,113 @@ export const appraisalLetterEmailTemplate = (employee, appraisal) => {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
-        body { margin: 0; padding: 0; background: #f4f4f4; font-family: Arial, Helvetica, sans-serif; color: #111111; }
-        .wrap { max-width: 620px; margin: 30px auto; background: #ffffff; border-radius: 8px; overflow: hidden; }
-        .top-bar { background: #002B38; padding: 20px 32px; }
-        .brand { font-size: 22px; font-weight: bold; color: #ffffff; }
-        .brand span { color: #E05C1A; }
-        .orange-line { height: 4px; background: #E05C1A; }
-        .body { padding: 32px; }
-        p { font-size: 15px; line-height: 1.7; margin: 10px 0; color: #333333; }
-        .greeting { font-size: 16px; color: #002B38; font-weight: bold; margin-bottom: 14px; }
-        .highlight {
-            background: #fff7f2; border-left: 4px solid #E05C1A;
-            padding: 14px 18px; border-radius: 4px; margin: 20px 0; font-size: 14px; color: #333;
+        body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            font-family: Arial, Helvetica, sans-serif;
+            color: #222222;
         }
-        .highlight strong { color: #002B38; }
-        .note { font-size: 13px; color: #555555; font-style: italic; margin-top: 20px; }
-        .footer { background: #002B38; padding: 16px 32px; text-align: center; }
-        .footer p { color: #aaaaaa; font-size: 11px; margin: 0; line-height: 1.7; }
+        .wrap {
+            max-width: 620px;
+            margin: 0 auto;
+            background: #ffffff;
+        }
+        .body {
+            padding: 32px 0;
+        }
+        .subject {
+            font-size: 15px;
+            font-weight: bold;
+            color: #111111;
+            margin: 0 0 22px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e8e8e8;
+        }
+        p {
+            font-size: 14px;
+            line-height: 1.85;
+            margin: 0 0 16px;
+            color: #333333;
+        }
+        .closing {
+            margin-top: 28px;
+        }
+        .signature {
+            margin-top: 6px;
+            font-size: 14px;
+            color: #111111;
+        }
+        .signature strong {
+            display: block;
+            font-size: 14px;
+        }
+        .divider {
+            border: none;
+            border-top: 1px solid #eeeeee;
+            margin: 28px 0;
+        }
+        .disclaimer {
+            font-size: 12px;
+            color: #888888;
+            font-style: italic;
+            margin: 0;
+            line-height: 1.6;
+        }
     </style>
 </head>
 <body>
     <div class="wrap">
-        <div class="top-bar">
-            <div class="brand">KIAQ<span> TECHNOLOGIES</span></div>
-        </div>
-        <div class="orange-line"></div>
         <div class="body">
-            <div class="greeting">Dear ${employee.firstName} ${employee.lastName},</div>
+
+            <div class="subject">Letter of Salary Revision</div>
+
+            <p>Dear ${employee.firstName} ${employee.lastName},</p>
+
             <p>
-                Congratulations! We are pleased to share your <strong>revised compensation letter</strong>
-                following your performance appraisal. Please find the letter and the revised compensation
-                annexure attached to this email.
+                We are pleased to inform you that, in recognition of your performance and valuable
+                contribution to <strong>${companyName}</strong>, your compensation has been revised with effect
+                from <strong>${effectiveDate}</strong>.
             </p>
-            <div class="highlight">
-                <strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}<br/>
-                <strong>Employee ID:</strong> ${employee.employeeId}<br/>
-                <strong>Previous Annual CTC:</strong> ₹${Number(appraisal.previousAnnualSalary).toLocaleString('en-IN')}<br/>
-                <strong>Revised Annual CTC:</strong> ₹${Number(appraisal.newAnnualSalary).toLocaleString('en-IN')}<br/>
-                <strong>Increment:</strong> ${Number(appraisal.percentageIncrement).toFixed(2)}%<br/>
-                <strong>Effective From:</strong> ${new Date(appraisal.effectiveDate).toLocaleDateString('en-GB')}
+
+            <p>
+                Your revised Annual Cost to Company (CTC) has been set at
+                <strong>INR ${formattedNew}</strong>, reflecting an increment of
+                <strong>${increment}%</strong> over your previous Annual CTC of
+                <strong>INR ${formattedPrevious}</strong>. A detailed compensation
+                breakup is enclosed as an annexure in the attached appraisal letter for
+                your reference.
+            </p>
+
+            <p>
+                Please find the appraisal letter attached to this email. We encourage you
+                to review the document at your earliest convenience. Should you have any
+                queries regarding the revised structure, you are welcome to reach out to
+                the HR department at <strong>hr@kiaq.in</strong>.
+            </p>
+
+            <p>
+                We sincerely appreciate your dedication and the consistent effort you bring
+                to your role. We look forward to your continued growth and contribution
+                to the organisation.
+            </p>
+
+            <div class="closing">
+                <p style="margin:0;">Warm regards,</p>
+                <div class="signature">
+                    <strong>${process.env.HR_NAME || 'Hazeena Begum A'}</strong>
+                    ${process.env.HR_TITLE || 'SR Executive – Human Resource'}<br/>
+                    ${companyName}
+                </div>
             </div>
-            <p>
-                Thank you for your continued dedication and hard work. We look forward to your ongoing
-                contribution to the team.
+
+            <hr class="divider" />
+
+            <p class="disclaimer">
+                This is a system-generated email. Please do not reply directly to this message.
+                For any assistance, contact hr@kiaq.in.
             </p>
-            <p class="note">
-                This is an automated email. Please do not reply to this message.
-            </p>
-        </div>
-        <div class="footer">
-            <p>
-                KIAQ TECHNOLOGIES PRIVATE LIMITED<br/>
-                M181, Cactus, Ground Floor, Block B, TECCI Park, Rajiv Gandhi Salai,<br/>
-                Elcot SEZ, Sholinganallur, Chennai – 600119, Tamil Nadu, India<br/>
-                Email: hr@kiaq.in  |  Website: www.kiaq.in
-            </p>
+
         </div>
     </div>
 </body>
