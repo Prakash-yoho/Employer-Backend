@@ -1,7 +1,14 @@
 import express from 'express';
 import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, generateExperienceCertificateDirect, generateRelievingLetterDirect, getAllEmployees, getAllEmployeesAppointment, getEmployeeById, getEmployeeFace, getEmployeeProfile, getEmployeesWithUpdateRequests,getResignedEmployees, previewExperienceCertificate, previewRelievingLetter, registerEmployeeFace, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, sendExperienceCertificate, sendRelievingLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
-import upload, { handleMulterError } from '../config/imageMulter.js'
+import upload, { handleMulterError } from '../config/imageMulter.js';
+
+import {
+    getEmployeesWithAppraisals,
+    getEmployeesForAppraisalSelection,
+    sendAppraisalLetter,
+    previewAppraisalLetter,
+} from '../controllers/employeeController.js';
 
 const router = express.Router();
 
@@ -47,6 +54,31 @@ router.get('/update-requests', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), get
 
 router.get('/all-appointmentletters', getAllEmployeesAppointment);
 
+
+// add near the resigned-employees routes
+router.get(
+    '/appraisals',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    getEmployeesWithAppraisals
+);
+
+router.get(
+    '/eligible-for-appraisal',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    getEmployeesForAppraisalSelection
+);
+
+router.post(
+    '/:id/send-appraisal-letter',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    sendAppraisalLetter
+);
+
+router.get(
+    '/:id/preview-appraisal-letter/:appraisalId',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    previewAppraisalLetter
+);
 
 // Resigned employees management (HR/Admin)
 router.get(

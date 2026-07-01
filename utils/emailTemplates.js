@@ -1076,3 +1076,79 @@ export const passwordChangedByAdminTemplate = (employee, newPassword) => {
 </html>
   `;
 };
+
+
+
+
+
+// add to utils/emailTemplates.js
+
+export const appraisalLetterEmailTemplate = (employee, appraisal) => {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body { margin: 0; padding: 0; background: #f4f4f4; font-family: Arial, Helvetica, sans-serif; color: #111111; }
+        .wrap { max-width: 620px; margin: 30px auto; background: #ffffff; border-radius: 8px; overflow: hidden; }
+        .top-bar { background: #002B38; padding: 20px 32px; }
+        .brand { font-size: 22px; font-weight: bold; color: #ffffff; }
+        .brand span { color: #E05C1A; }
+        .orange-line { height: 4px; background: #E05C1A; }
+        .body { padding: 32px; }
+        p { font-size: 15px; line-height: 1.7; margin: 10px 0; color: #333333; }
+        .greeting { font-size: 16px; color: #002B38; font-weight: bold; margin-bottom: 14px; }
+        .highlight {
+            background: #fff7f2; border-left: 4px solid #E05C1A;
+            padding: 14px 18px; border-radius: 4px; margin: 20px 0; font-size: 14px; color: #333;
+        }
+        .highlight strong { color: #002B38; }
+        .note { font-size: 13px; color: #555555; font-style: italic; margin-top: 20px; }
+        .footer { background: #002B38; padding: 16px 32px; text-align: center; }
+        .footer p { color: #aaaaaa; font-size: 11px; margin: 0; line-height: 1.7; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="top-bar">
+            <div class="brand">KIAQ<span> TECHNOLOGIES</span></div>
+        </div>
+        <div class="orange-line"></div>
+        <div class="body">
+            <div class="greeting">Dear ${employee.firstName} ${employee.lastName},</div>
+            <p>
+                Congratulations! We are pleased to share your <strong>revised compensation letter</strong>
+                following your performance appraisal. Please find the letter and the revised compensation
+                annexure attached to this email.
+            </p>
+            <div class="highlight">
+                <strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}<br/>
+                <strong>Employee ID:</strong> ${employee.employeeId}<br/>
+                <strong>Previous Annual CTC:</strong> ₹${Number(appraisal.previousAnnualSalary).toLocaleString('en-IN')}<br/>
+                <strong>Revised Annual CTC:</strong> ₹${Number(appraisal.newAnnualSalary).toLocaleString('en-IN')}<br/>
+                <strong>Increment:</strong> ${Number(appraisal.percentageIncrement).toFixed(2)}%<br/>
+                <strong>Effective From:</strong> ${new Date(appraisal.effectiveDate).toLocaleDateString('en-GB')}
+            </div>
+            <p>
+                Thank you for your continued dedication and hard work. We look forward to your ongoing
+                contribution to the team.
+            </p>
+            <p class="note">
+                This is an automated email. Please do not reply to this message.
+            </p>
+        </div>
+        <div class="footer">
+            <p>
+                KIAQ TECHNOLOGIES PRIVATE LIMITED<br/>
+                M181, Cactus, Ground Floor, Block B, TECCI Park, Rajiv Gandhi Salai,<br/>
+                Elcot SEZ, Sholinganallur, Chennai – 600119, Tamil Nadu, India<br/>
+                Email: hr@kiaq.in  |  Website: www.kiaq.in
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+  `;
+};

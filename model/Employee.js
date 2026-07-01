@@ -170,6 +170,44 @@ const emergencyContactSchema = new Schema({
     address: String
 }, { _id: false });
 
+
+
+
+// In model/Employee.js — add this schema near the top, with the other sub-schemas
+
+const appraisalSchema = new Schema({
+    previousAnnualSalary: {
+        type: Number,
+        required: true
+    },
+    newAnnualSalary: {
+        type: Number,
+        required: true
+    },
+    percentageIncrement: {
+        type: Number,
+        required: true
+    },
+    effectiveDate: {
+        type: Date,
+        required: true
+    },
+    letterDate: {
+        type: Date,
+        default: Date.now
+    },
+    refNo: String,
+    designation: String,      // designation at time of appraisal (in case it changes later)
+    department: String,
+    url: { type: String },
+    fileName: { type: String },
+    sentAt: { type: Date, default: Date.now },
+    generatedBy: {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser' },
+        userEmail: String
+    }
+}, { timestamps: true });
+
 // Main Employee Schema
 const employeeSchema = new Schema({
     // SECTION 1: EMPLOYEE BASIC DETAILS
@@ -390,6 +428,10 @@ const employeeSchema = new Schema({
         isVerified: { type: Boolean, default: false }, // ✅ important
         uploadedAt: { type: Date, default: Date.now }
     },
+    appraisals: {
+        type: [appraisalSchema],
+        default: []
+    },
 
     // Resignation & leaving dates (set by HR when deactivating)
     resignationDate: {
@@ -540,6 +582,9 @@ const employeeSchema = new Schema({
 }, {
     timestamps: true
 });
+
+
+
 
 // Remove password from JSON output
 employeeSchema.methods.toJSON = function () {

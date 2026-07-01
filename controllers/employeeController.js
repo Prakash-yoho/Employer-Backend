@@ -31,6 +31,16 @@ import {
 import { saveExperienceCertificateInS3 } from '../utils/Saveexperiencecertificateins3.js';
 import { saveRelievingLetterInS3 } from '../utils/Saverelievingletterins3.js';
 
+
+
+// add to employeeController.js — alongside the other imports at the top
+import { generateAppraisalLetter } from '../services/appraisalLetterService.js';
+import { saveAppraisalLetterInS3 } from '../utils/saveAppraisalLetterInS3.js';
+import { appraisalLetterEmailTemplate } from '../utils/emailTemplates.js';
+
+
+
+
 dotenv.config();
 
 
@@ -1599,7 +1609,6 @@ export const sendAppointmentLetter = async (req, res) => {
         }
 
         // ✅ 4️⃣ Upload to S3
-        // ✅ 4️⃣ Upload to S3
         let appointmentUrl;
         try {
             appointmentUrl = await saveAppointmentLetterInS3(
@@ -1706,6 +1715,201 @@ export const verifyAppointmentLetter = async (req, res) => {
 
 
 
+/**
+ * GET /api/employees/appraisals
+ * Returns only employees who have at least one appraisal on record
+ */
+export const getEmployeesWithAppraisals = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can view appraisals' });
+        }
+
+        const employees = await Employee.find({ 'appraisals.0': { $exists: true } })
+            .select('firstName lastName officialEmail employeeId designation department annualSalary appraisals isActive')
+            .sort({ updatedAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Employees with appraisals retrieved successfully',
+            data: { employees, total: employees.length },
+        });
+    } catch (error) {
+        console.error('Get employees with appraisals error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/employees/eligible-for-appraisal
+ * Returns ALL active employees (for the picker when HR clicks "Appraisals")
+ */
+export const getEmployeesForAppraisalSelection = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can view this list' });
+        }
+
+        const employees = await Employee.find({ isActive: true })
+            .select('firstName lastName officialEmail employeeId designation department annualSalary appraisals')
+            .sort({ firstName: 1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Employees retrieved successfully',
+            data: { employees, total: employees.length },
+        });
+    } catch (error) {
+        console.error('Get employees for appraisal selection error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * POST /api/employees/:id/send-appraisal-letter
+ * Body: { newAnnualSalary, percentageIncrement, effectiveDate, letterDate, refNo }
+ * Always pushes a NEW appraisal entry (array), generates a fresh PDF + annexure, uploads, emails.
+ */
+export const sendAppraisalLetter = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can issue appraisal letters' });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+
+        const { newAnnualSalary, percentageIncrement, effectiveDate, letterDate, refNo } = req.body;
+
+        if (newAnnualSalary === undefined || percentageIncrement === undefined || !effectiveDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'newAnnualSalary, percentageIncrement and effectiveDate are required',
+            });
+        }
+
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: 'Employee not found' });
+        }
+
+        const previousAnnualSalary = employee.annualSalary || 0;
+
+        const empData = {
+            fullName: `${employee.firstName} ${employee.lastName}`,
+            employeeId: employee.employeeId,
+            designation: employee.designation,
+            department: employee.department,
+            previousAnnualSalary,
+            newAnnualSalary,
+            percentageIncrement,
+            effectiveDate,
+            letterDate: letterDate || new Date(),
+            refNo: refNo || `KIAQ/APR/${employee.employeeId}`,
+            hrName: process.env.HR_NAME || 'Hazeena Begum A',
+            hrTitle: process.env.HR_TITLE || 'SR Executive - Human Resource',
+        };
+
+        // 1. Generate PDF
+        const pdfBuffer = await generateAppraisalLetter(empData);
+
+        // 2. Upload to S3
+        const fullName = `${employee.firstName}${employee.lastName}`;
+        const url = await saveAppraisalLetterInS3(pdfBuffer, fullName);
+        const fileName = `${fullName}_AppraisalLetter_${Date.now()}_Kiaq.pdf`;
+
+        // 3. Build the appraisal record
+        const appraisalEntry = {
+            previousAnnualSalary,
+            newAnnualSalary,
+            percentageIncrement,
+            effectiveDate: new Date(effectiveDate),
+            letterDate: empData.letterDate,
+            refNo: empData.refNo,
+            designation: employee.designation,
+            department: employee.department,
+            url,
+            fileName,
+            sentAt: new Date(),
+            generatedBy: { userId: req.user._id, userEmail: req.user.email },
+        };
+
+        // 4. Push to appraisals[] AND update current annualSalary
+        await Employee.updateOne(
+            { _id: employee._id },
+            {
+                $push: { appraisals: appraisalEntry },
+                $set: { annualSalary: newAnnualSalary, lastUpdatedAt: new Date(), lastUpdatedBy: req.user._id },
+            }
+        );
+
+        // 5. Send email
+        let emailSent = false;
+        try {
+            await SendMailJet({
+                to: employee.personalEmail || employee.officialEmail,
+                subject: `Appraisal Letter – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
+                html: appraisalLetterEmailTemplate(employee, appraisalEntry),
+                attachments: [{
+                    ContentType: 'application/pdf',
+                    Filename: fileName,
+                    Base64Content: pdfBuffer.toString('base64'),
+                }],
+            });
+            emailSent = true;
+        } catch (emailErr) {
+            console.error('Appraisal letter email error:', emailErr);
+        }
+
+        const updatedEmployee = await Employee.findById(employee._id).select('-officialPassword');
+
+        return res.status(200).json({
+            success: true,
+            message: `Appraisal letter sent successfully${emailSent ? ' with email' : ' (email failed)'}`,
+            data: {
+                appraisal: appraisalEntry,
+                employee: updatedEmployee,
+                emailSent,
+            },
+        });
+    } catch (error) {
+        console.error('Send appraisal letter error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/employees/:id/preview-appraisal-letter/:appraisalId
+ * Returns 15-min signed URL for a specific appraisal letter
+ */
+export const previewAppraisalLetter = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+        const { id, appraisalId } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+
+        const employee = await Employee.findById(id);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: 'Employee not found' });
+        }
+
+        const appraisal = employee.appraisals.id(appraisalId);
+        if (!appraisal?.url) {
+            return res.status(404).json({ success: false, message: 'Appraisal letter not found' });
+        }
+
+        const fileUrl = await getSignedS3Url(appraisal.url);
+        return res.status(200).json({ success: true, fileUrl });
+    } catch (error) {
+        console.error('Preview appraisal letter error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 // Register face
