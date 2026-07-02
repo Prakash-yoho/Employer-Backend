@@ -22,7 +22,8 @@ export async function generatePayrollExcel({ employees, fieldKeys, month }) {
     views: [{ state: "frozen", ySplit: 3 }],
   });
 
-  const colCount = fields.length;
+  // +1 for the S.No column
+  const colCount = fields.length + 1;
 
   // Title row
   ws.mergeCells(1, 1, 1, Math.max(1, colCount));
@@ -39,10 +40,17 @@ export async function generatePayrollExcel({ employees, fieldKeys, month }) {
   sub.font = { italic: true, size: 9, color: { argb: "FF666666" } };
   sub.alignment = { horizontal: "center" };
 
-  // Header row (row 3)
+  // Header row (row 3) — S.No first, then the selected fields
   const headerRow = ws.getRow(3);
+  const snoHeaderCell = headerRow.getCell(1);
+  snoHeaderCell.value = "S.No";
+  snoHeaderCell.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
+  snoHeaderCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + BRAND } };
+  snoHeaderCell.alignment = { horizontal: "center", vertical: "middle" };
+  snoHeaderCell.border = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } };
+
   fields.forEach((f, i) => {
-    const cell = headerRow.getCell(i + 1);
+    const cell = headerRow.getCell(i + 2); // shifted by 1
     cell.value = f.label;
     cell.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + BRAND } };
@@ -54,8 +62,17 @@ export async function generatePayrollExcel({ employees, fieldKeys, month }) {
   // Data rows
   employees.forEach((emp, ri) => {
     const row = ws.getRow(4 + ri);
+
+    // S.No cell
+    const snoCell = row.getCell(1);
+    snoCell.value = ri + 1;
+    snoCell.font = { size: 9 };
+    snoCell.alignment = { horizontal: "center", vertical: "middle" };
+    snoCell.border = { top: { style: "hair" }, bottom: { style: "hair" }, left: { style: "hair" }, right: { style: "hair" } };
+    if (ri % 2 === 1) snoCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F7F8" } };
+
     fields.forEach((f, ci) => {
-      const cell = row.getCell(ci + 1);
+      const cell = row.getCell(ci + 2); // shifted by 1
       const val = f.get(emp);
       cell.value = val ?? "";
       cell.font = { size: 9 };
@@ -68,9 +85,16 @@ export async function generatePayrollExcel({ employees, fieldKeys, month }) {
   // ── Totals row ──
   const totalRowIdx = 4 + employees.length;
   const totalRow = ws.getRow(totalRowIdx);
+
+  // S.No column stays blank on the totals row
+  const snoTotalCell = totalRow.getCell(1);
+  snoTotalCell.value = "";
+  snoTotalCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8EDEE" } };
+  snoTotalCell.border = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "hair" }, right: { style: "hair" } };
+
   let labelPlaced = false;
   fields.forEach((f, ci) => {
-    const cell = totalRow.getCell(ci + 1);
+    const cell = totalRow.getCell(ci + 2); // shifted by 1
     if (f.sum) {
       const sum = employees.reduce((s, e) => s + (Number(f.num?.(e)) || 0), 0);
       // Day-count fields stay integer-ish; money fields 2dp
@@ -90,7 +114,8 @@ export async function generatePayrollExcel({ employees, fieldKeys, month }) {
   });
   totalRow.height = 20;
 
-  // Auto column widths
+  // Auto column widths — S.No first
+  ws.getColumn(1).width = 7;
   fields.forEach((f, i) => {
     let max = f.label.length;
     employees.forEach((emp) => {
@@ -98,7 +123,7 @@ export async function generatePayrollExcel({ employees, fieldKeys, month }) {
       const len = v == null ? 0 : String(v).length;
       if (len > max) max = len;
     });
-    ws.getColumn(i + 1).width = Math.min(40, Math.max(10, max + 3));
+    ws.getColumn(i + 2).width = Math.min(40, Math.max(10, max + 3)); // shifted by 1
   });
 
   const buf = await wb.xlsx.writeBuffer();
@@ -117,7 +142,8 @@ export function generatePayrollPDF({ employees, fieldKeys, month }) {
 
       // Decide layout: a clean table only fits ~8 columns on landscape A4.
       // Beyond that, switch to a stacked per-employee card layout so nothing
-      // gets crushed into unreadable slivers.
+      // gets crushed into unreadable slivers. (S.No doesn't count toward this
+      // limit — it's a fixed narrow column, not a selected field.)
       const TABLE_MAX_COLS = 8;
       const useTable = fields.length <= TABLE_MAX_COLS;
 
@@ -164,13 +190,17 @@ export function generatePayrollPDF({ employees, fieldKeys, month }) {
 function renderTable(doc, { fields, employees, pageL, pageR, usableW }) {
   let y = 78;
 
+  // Fixed narrow S.No column; remaining width distributed across fields as before.
+  const snoW = 28;
+  const tableW = usableW - snoW;
+
   const rawWidths = fields.map((f) => {
     let max = f.label.length;
     employees.forEach((e) => { const v = f.get(e); const l = v == null ? 0 : String(v).length; if (l > max) max = l; });
     return Math.max(8, Math.min(30, max));
   });
   const totalRaw = rawWidths.reduce((s, w) => s + w, 0) || 1;
-  const colW = rawWidths.map((w) => (w / totalRaw) * usableW);
+  const colW = rawWidths.map((w) => (w / totalRaw) * tableW);
 
   const fontSize = fields.length > 6 ? 8.5 : 9;
   const rowH = fontSize + 12;
@@ -178,7 +208,8 @@ function renderTable(doc, { fields, employees, pageL, pageR, usableW }) {
   const drawHeader = () => {
     doc.rect(pageL, y, usableW, rowH).fill("#" + BRAND);
     doc.fillColor("#fff").font("Helvetica-Bold").fontSize(fontSize);
-    let x = pageL;
+    doc.text("S.No", pageL + 3, y + (rowH - fontSize) / 2 - 1, { width: snoW - 6, align: "center", lineBreak: false });
+    let x = pageL + snoW;
     fields.forEach((f, i) => {
       doc.text(f.label, x + 5, y + (rowH - fontSize) / 2 - 1, { width: colW[i] - 10, ellipsis: true, lineBreak: false });
       x += colW[i];
@@ -194,7 +225,8 @@ function renderTable(doc, { fields, employees, pageL, pageR, usableW }) {
     }
     if (ri % 2 === 1) doc.rect(pageL, y, usableW, rowH).fill("#f5f7f8");
     doc.fillColor("#222");
-    let x = pageL;
+    doc.text(String(ri + 1), pageL + 3, y + (rowH - fontSize) / 2 - 1, { width: snoW - 6, align: "center", lineBreak: false });
+    let x = pageL + snoW;
     fields.forEach((f, i) => {
       const v = f.get(emp);
       doc.text(v == null ? "" : String(v), x + 5, y + (rowH - fontSize) / 2 - 1, { width: colW[i] - 10, ellipsis: true, lineBreak: false });
@@ -208,7 +240,8 @@ function renderTable(doc, { fields, employees, pageL, pageR, usableW }) {
   if (y + rowH > doc.page.height - doc.page.margins.bottom) { doc.addPage(); y = doc.page.margins.top; drawHeader(); }
   doc.rect(pageL, y, usableW, rowH).fill("#e8edee");
   doc.fillColor("#" + BRAND).font("Helvetica-Bold").fontSize(fontSize);
-  let x = pageL, labelPlaced = false;
+  // S.No column stays blank on the totals row
+  let x = pageL + snoW, labelPlaced = false;
   fields.forEach((f, i) => {
     let text = "";
     if (f.sum) {
@@ -235,16 +268,17 @@ function renderCards(doc, { fields, employees, pageL, pageR, usableW }) {
     grouped[f.group].push(f);
   });
 
-  const cardPad   = 14;
-  const cols      = 3;
-  const colGap    = 16;
-  const cellW     = (usableW - cardPad * 2 - colGap * (cols - 1)) / cols;
-  const cellH     = 26;   // label (top) + value (below) per field
+  const cardPad = 14;
+  const cols = 3;
+  const colGap = 16;
+  const cellW = (usableW - cardPad * 2 - colGap * (cols - 1)) / cols;
+  const cellH = 26;   // label (top) + value (below) per field
   const groupHdrH = 16;   // section sub-header
-  const groupGap  = 6;    // gap after each group
-  const nameBarH  = 26;
-  const topPad    = 10;   // padding under the name bar
-  const botPad    = 12;   // padding above card bottom edge
+  const groupGap = 6;    // gap after each group
+  const nameBarH = 26;
+  const topPad = 10;   // padding under the name bar
+  const botPad = 12;   // padding above card bottom edge
+  const snoBadgeW = 26;   // width reserved for the S.No badge in the name bar
 
   const bottom = () => doc.page.height - doc.page.margins.bottom;
 
@@ -282,7 +316,7 @@ function renderCards(doc, { fields, employees, pageL, pageR, usableW }) {
 
   let y = 80;
 
-  employees.forEach((emp) => {
+  employees.forEach((emp, ei) => {
     // bind emp to each field for the drawer (avoids passing emp around)
     groupsOrder.forEach((g) => grouped[g].forEach((f) => (f._emp = emp)));
 
@@ -298,8 +332,15 @@ function renderCards(doc, { fields, employees, pageL, pageR, usableW }) {
     doc.roundedRect(pageL, y, usableW, nameBarH, 6).clip();
     doc.rect(pageL, y, usableW, nameBarH).fill("#" + BRAND);
     doc.restore();
+
+    // S.No badge (left edge of the name bar)
+    doc.fillColor("#ffffff").fillOpacity(0.18)
+      .rect(pageL, y, snoBadgeW, nameBarH).fill();
+    doc.fillOpacity(1).fillColor("#fff").font("Helvetica-Bold").fontSize(10.5)
+      .text(String(ei + 1), pageL, y + 8, { width: snoBadgeW, align: "center", lineBreak: false });
+
     doc.fillColor("#fff").font("Helvetica-Bold").fontSize(10.5)
-      .text(`${emp.name}  (${emp.employeeId})`, pageL + cardPad, y + 8, { width: usableW - cardPad * 2, ellipsis: true, lineBreak: false });
+      .text(`${emp.name}  (${emp.employeeId})`, pageL + snoBadgeW + 6, y + 8, { width: usableW - snoBadgeW - 6 - cardPad, ellipsis: true, lineBreak: false });
 
     // Body
     let cy = y + nameBarH + topPad;

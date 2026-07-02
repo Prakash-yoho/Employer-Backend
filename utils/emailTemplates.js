@@ -1086,7 +1086,7 @@ export const passwordChangedByAdminTemplate = (employee, newPassword) => {
 export const appraisalLetterEmailTemplate = (employee, appraisal) => {
   const formattedPrevious = Number(appraisal.previousAnnualSalary).toLocaleString('en-IN');
   const formattedNew      = Number(appraisal.newAnnualSalary).toLocaleString('en-IN');
-  const increment         = Number(appraisal.percentageIncrement).toFixed(2);
+  const increment         = Number(appraisal.percentageIncrement);
   const effectiveDate     = new Date(appraisal.effectiveDate).toLocaleDateString('en-GB', {
     day: '2-digit', month: 'long', year: 'numeric',
   });
@@ -1160,7 +1160,7 @@ export const appraisalLetterEmailTemplate = (employee, appraisal) => {
 
             <div class="subject">Letter of Salary Revision</div>
 
-            <p>Dear ${employee.firstName} ${employee.lastName},</p>
+            <p>Dear <strong>${employee.firstName} ${employee.lastName},</strong></p>
 
             <p>
                 We are pleased to inform you that, in recognition of your performance and valuable

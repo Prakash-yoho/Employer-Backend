@@ -863,14 +863,45 @@ export const downloadMonthViolationReport = async (req, res) => {
   }
 };
 
+
+
+// ─── GET /api/payroll/report-employees?month=YYYY-MM&mode=released|overall ────
+// HR/Admin — list employees for the report picker.
+//   mode=released (default) → only employees whose slip is released
+//   mode=overall            → every active employee, released or not
+export const getReportEmployees = async (req, res) => {
+  try {
+    const month = req.query.month || dayjs.utc().format("YYYY-MM");
+    const mode = req.query.mode === "overall" ? "overall" : "released";
+    const data = await buildPayroll(month);
+
+    const source = mode === "overall" ? data.employees : data.employees.filter((e) => e.released);
+
+    const employees = source.map((e) => ({
+      employeeId: e.employeeId,
+      name: e.name,
+      designation: e.designation,
+      department: e.department,
+      doj: e.joiningDate || null,
+      released: !!e.released,
+    }));
+
+    return res.status(200).json({ success: true, month, mode, employees, total: employees.length });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ─── POST /api/payroll/report ─────────────────────────────────────────────────
-// HR/Admin — generate Excel or PDF report for RELEASED slips only.
-// Body: { month, format: "excel"|"pdf", fields: string[], employeeIds?: string[] }
-//   - employeeIds omitted/empty → all released employees
-//   - only employees whose slip is released for the month are included
+// HR/Admin — generate Excel or PDF report.
+// Body: { month, format: "excel"|"pdf", fields: string[], employeeIds?: string[], reportType?: "released"|"overall" }
+//   - reportType "released" (default) → only released slips
+//   - reportType "overall"            → every active employee; unreleased rows
+//     are tagged status:"Not Released" but still carry their available data
+//   - employeeIds omitted/empty → all employees in scope for the chosen reportType
 export const generatePayrollReport = async (req, res) => {
   try {
-    const { month, format = "excel", fields = [], employeeIds } = req.body;
+    const { month, format = "excel", fields = [], employeeIds, reportType = "released" } = req.body;
     if (!month) return res.status(400).json({ success: false, message: "month required" });
     if (!Array.isArray(fields) || fields.length === 0)
       return res.status(400).json({ success: false, message: "Select at least one field" });
@@ -878,7 +909,10 @@ export const generatePayrollReport = async (req, res) => {
     const { generatePayrollExcel, generatePayrollPDF } = await import("../services/payrollReportService.js");
 
     const data = await buildPayroll(month);
-    let employees = data.employees.filter((e) => e.released); // RELEASED ONLY
+
+    let employees = reportType === "overall"
+      ? data.employees
+      : data.employees.filter((e) => e.released); // RELEASED ONLY
 
     if (Array.isArray(employeeIds) && employeeIds.length > 0) {
       const set = new Set(employeeIds);
@@ -886,11 +920,22 @@ export const generatePayrollReport = async (req, res) => {
     }
 
     if (employees.length === 0)
-      return res.status(404).json({ success: false, message: "No released slips found for this selection" });
+      return res.status(404).json({
+        success: false,
+        message: reportType === "overall" ? "No employees found for this selection" : "No released slips found for this selection",
+      });
+
+    // Tag each row with a human-readable status. In "overall" mode this is
+    // what lets the report show "Not Released" for slips that aren't out yet,
+    // while still printing whatever employee/pay data is already available.
+    employees = employees.map((e) => ({
+      ...e,
+      status: e.released ? "Released" : "Not Released",
+    }));
 
     const safeMonth = month;
     if (format === "pdf") {
-      const buf = await generatePayrollPDF({ employees, fieldKeys: fields, month });
+      const buf = await generatePayrollPDF({ employees, fieldKeys: fields, month, reportType });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="payroll_report_${safeMonth}.pdf"`);
       res.setHeader("Content-Length", buf.length);
@@ -898,28 +943,13 @@ export const generatePayrollReport = async (req, res) => {
     }
 
     // default excel
-    const buf = await generatePayrollExcel({ employees, fieldKeys: fields, month });
+    const buf = await generatePayrollExcel({ employees, fieldKeys: fields, month, reportType });
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="payroll_report_${safeMonth}.xlsx"`);
     res.setHeader("Content-Length", buf.length);
     return res.send(buf);
   } catch (err) {
     console.error("generatePayrollReport Error:", err);
-    return res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-// ─── GET /api/payroll/report-employees?month=YYYY-MM ──────────────────────────
-// HR/Admin — list employees with released slips for the picker (id + name only)
-export const getReportEmployees = async (req, res) => {
-  try {
-    const month = req.query.month || dayjs.utc().format("YYYY-MM");
-    const data = await buildPayroll(month);
-    const released = data.employees
-      .filter((e) => e.released)
-      .map((e) => ({ employeeId: e.employeeId, name: e.name, designation: e.designation }));
-    return res.status(200).json({ success: true, month, employees: released, total: released.length });
-  } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 };
