@@ -419,6 +419,23 @@ const employeeSchema = new Schema({
         isVerified: { type: Boolean, default: false }, // ✅ important
         uploadedAt: { type: Date, default: Date.now }
     },
+
+    idCard: {
+        status: {
+            type: String,
+            enum: ['not_generated', 'active', 'expired'],
+            default: 'not_generated'
+        },
+        idCardNumber: { type: String, default: null },
+        verificationToken: { type: String, default: null, index: true },
+        issuedAt: { type: Date, default: null },
+        expiredAt: { type: Date, default: null },
+        issuedBy: {
+            userId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser' },
+            userEmail: String
+        }
+    },
+
     appraisals: {
         type: [appraisalSchema],
         default: []

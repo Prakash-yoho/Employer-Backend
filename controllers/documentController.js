@@ -118,7 +118,8 @@ export const uploadDocument = async (req, res) => {
             'aadharCard', 'panCard', 'addressProof', 'tenthCertificate', 'eleventhCertificate',
             'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter',
             'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate', 'pgconsolidatedCertificate', 'diplomaconsolidatedCertificate',
-            'diplomaCertificate', 'pgCertificate', 'trainingCertificates', 'interviewresume'
+            'diplomaCertificate', 'pgCertificate', 'trainingCertificates', 'interviewresume',
+            'passportPhoto'
         ];
 
         const validExperienceSubTypes = [
@@ -1066,7 +1067,8 @@ export const previewDocument = async (req, res) => {
                 pgconsolidatedCertificate: 'pgconsolidatedCertificate',
                 diplomaconsolidatedCertificate: 'diplomaconsolidatedCertificate',
                 signedOfferLetter: 'signedOfferLetter',
-                bankPassbook: 'bankPassbook'
+                bankPassbook: 'bankPassbook',
+                passportPhoto: 'passportPhoto'
             };
 
             const fieldName = documentFieldMap[documentType];
@@ -1196,24 +1198,25 @@ export const downloadDocument = async (req, res) => {
         }
         else {
             const documentFieldMap = {
-                aadharCard: "aadharCard",
-                panCard: "panCard",
-                drivingLicense: "drivingLicense",
-                passport: "passport",
-                interviewresume: "interviewresume",
-                addressProof: "addressProof",
-                birthCertificate: "birthCertificate",
-                tenthCertificate: "tenthCertificate",
-                eleventhCertificate: "eleventhCertificate",
-                twelfthCertificate: "twelfthCertificate",
-                ugCertificate: "ugCertificate",
-                pgCertificate: "pgCertificate",
-                diplomaCertificate: "diplomaCertificate",
-                consolidatedCertificate: "consolidatedCertificate",
-                pgconsolidatedCertificate: "pgconsolidatedCertificate",
-                diplomaconsolidatedCertificate: "diplomaconsolidatedCertificate",
-                signedOfferLetter: "signedOfferLetter",
-                bankPassbook: "bankPassbook",
+                aadharCard: 'aadharCard',
+                panCard: 'panCard',
+                drivingLicense: 'drivingLicense',
+                passport: 'passport',
+                interviewresume: 'interviewresume',
+                addressProof: 'addressProof',
+                birthCertificate: 'birthCertificate',
+                tenthCertificate: 'tenthCertificate',
+                eleventhCertificate: 'eleventhCertificate',
+                twelfthCertificate: 'twelfthCertificate',
+                ugCertificate: 'ugCertificate',
+                pgCertificate: 'pgCertificate',
+                diplomaCertificate: 'diplomaCertificate',
+                consolidatedCertificate: 'consolidatedCertificate',
+                pgconsolidatedCertificate: 'pgconsolidatedCertificate',
+                diplomaconsolidatedCertificate: 'diplomaconsolidatedCertificate',
+                signedOfferLetter: 'signedOfferLetter',
+                bankPassbook: 'bankPassbook',
+                passportPhoto: 'passportPhoto'
             };
 
             const fieldName = documentFieldMap[documentType];

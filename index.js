@@ -4,6 +4,7 @@ import { connectDB } from './config/db.js'
 import employerRoutes from './routes/employerUserRoutes.js'
 import employeeRoutes from './routes/employeeRoutes.js'
 import documentRoutes from './routes/documentRoutes.js'
+import identitycardRoutes from './routes/identityCardRoutes.js'
 import ticketRoutes from './routes/ticketRoutes.js'
 import dashboardHRAdminRoutes from './routes/dashboardHRAdminRoutes.js'
 import assetRoutes from './routes/assetRoutes.js'
@@ -51,7 +52,8 @@ app.use(cors({
         'http://localhost:5173',
         'http://localhost:5174',
         'http://localhost:5175',
-        'http://localhost:5176'
+        'http://localhost:5176',
+        'http://192.168.1.12:5173',
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['*'],
@@ -70,6 +72,7 @@ app.get("/api/attendance/time-status", (req, res) => res.json(getTimeStatus()));
 app.use("/api/employer", employerRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/documents', documentRoutes);
+app.use('/api/identity-cards', identitycardRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -121,6 +124,6 @@ cron.schedule("5 0 * * *", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
+app.listen(PORT,'0.0.0.0', () => {
     console.log(`Server is running on PORT: ${PORT}`)
 })

@@ -767,7 +767,6 @@ export const getEmployeeById = async (req, res) => {
 // Update employee status (ADMIN/HR only)
 export const updateEmployeeStatus = async (req, res) => {
     try {
-        // Check if user has permission (ADMIN or HR)
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({
                 success: false,
@@ -785,7 +784,6 @@ export const updateEmployeeStatus = async (req, res) => {
             });
         }
 
-        // Validate ID format
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({
                 success: false,
@@ -801,14 +799,25 @@ export const updateEmployeeStatus = async (req, res) => {
             });
         }
 
-        // Update status
         employee.isActive = isActive;
         employee.updateRequested = false;
         employee.updateRequestReason = undefined;
         employee.lastUpdatedAt = new Date();
 
-        await employee.save();
+        // ── ID card auto-expiry on resignation / reset on reactivation ──
+        if (!isActive && employee.idCard?.status === 'active') {
+            employee.idCard.status = 'expired';
+            employee.idCard.expiredAt = new Date();
+        } else if (isActive && employee.idCard?.status === 'expired') {
+            // Reactivated employee — require HR to reissue a fresh card
+            employee.idCard.status = 'not_generated';
+            employee.idCard.idCardNumber = null;
+            employee.idCard.issuedAt = null;
+            employee.idCard.expiredAt = null;
+        }
+        // ──────────────────────────────────────────────────────────────
 
+        await employee.save();
 
         const employeeResponse = employee.toJSON();
 

@@ -117,6 +117,11 @@ const documentSchema = new Schema({
         default: () => ({})
     },
 
+    passportPhoto: {
+        type: documentFieldSchema,
+        default: () => ({})
+    },
+
     // OPTIONAL DOCUMENTS
     drivingLicense: {
         type: documentFieldSchema,
@@ -243,8 +248,9 @@ documentSchema.pre('save', async function (next) {
     try {
         // Count all document fields
         const mandatoryFields = [
-            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate','eleventhCertificate',
-            'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter','interviewresume'
+            'aadharCard', 'panCard', 'addressProof', 'tenthCertificate', 'eleventhCertificate',
+            'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter', 'interviewresume',
+            'passportPhoto'
         ];
 
         const optionalFields = [
