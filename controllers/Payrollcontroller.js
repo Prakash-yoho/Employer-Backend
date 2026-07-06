@@ -20,6 +20,37 @@ async function getRelease(month) {
   return doc;
 }
 
+// ── Audit helpers ─────────────────────────────────────────────────────────────
+
+/** Full details of the HR/Admin performing the current request. */
+function actorDetails(req) {
+  const u = req.user || {};
+  const name = [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || null;
+  return {
+    userId: u._id ? String(u._id) : (u.userId ? String(u.userId) : null),
+    employeeId: u.employeeId ?? null,
+    name,
+    email: u.email ?? null,
+    role: u.role ?? null,
+    phoneNumber: u.phoneNumber ?? null,
+  };
+}
+
+/** Short human-readable label for legacy string fields (releasedBy etc.). */
+function actorLabel(d) {
+  return d?.name || d?.email || d?.employeeId || d?.userId || null;
+}
+
+/**
+ * Append an entry to the month's payroll activity log.
+ * `changes` = [{ field, from, to }] — exactly what was changed.
+ */
+function logActivity(release, action, by, { employeeId = null, employeeIds = undefined, changes = [], meta = null } = {}) {
+  if (!Array.isArray(release.activityLog)) release.activityLog = [];
+  release.activityLog.push({ action, employeeId, employeeIds, changes, meta, by, at: new Date() });
+  release.markModified("activityLog");
+}
+
 /** Each violation day-record gets a stable id usable for skipping. */
 function violationId(v) {
   // Synthetic records (not-marked) already have string ids; real ones use _id.
@@ -261,9 +292,19 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
       // Stage 1 (released): HR-verified, in reports. Per-employee authoritative.
       released: hasEmpState ? !!empSt.released : !!release.released,
       releasedAt: empSt.releasedAt ?? release.releasedAt ?? null,
+      releasedBy: empSt.releasedBy ?? release.releasedBy ?? null,
+      releasedByDetails: empSt.releasedByDetails ?? release.releasedByDetails ?? null,
+      revertedAt: empSt.revertedAt ?? null,
+      revertedBy: empSt.revertedBy ?? null,
+      revertedByDetails: empSt.revertedByDetails ?? null,
       // Stage 2 (published): employee can see their slip.
       published: !!empSt.published,
       publishedAt: empSt.publishedAt ?? null,
+      publishedBy: empSt.publishedBy ?? null,
+      publishedByDetails: empSt.publishedByDetails ?? null,
+      unpublishedAt: empSt.unpublishedAt ?? null,
+      unpublishedBy: empSt.unpublishedBy ?? null,
+      unpublishedByDetails: empSt.unpublishedByDetails ?? null,
       manualWorkedDays: manualWorkedDays ?? null,
       isManual: manualWorkedDays != null,
 
@@ -351,12 +392,18 @@ export const updateSkippedViolations = async (req, res) => {
     if (await isEmployeeReleased(month, employeeId))
       return res.status(409).json({ success: false, message: "Slip is released. Revert it first to make changes." });
 
+    const by = actorDetails(req);
     const release = await getRelease(month);
     const idx = release.skipped.findIndex((s) => s.employeeId === employeeId);
+    const previousIds = idx >= 0 ? [...(release.skipped[idx].violationIds ?? [])] : [];
     if (idx >= 0) release.skipped[idx].violationIds = violationIds;
     else release.skipped.push({ employeeId, violationIds });
 
-    release.updatedBy = req.user?.employeeId ?? null;
+    release.updatedBy = actorLabel(by);
+    logActivity(release, "VIOLATIONS_SKIP_UPDATED", by, {
+      employeeId,
+      changes: [{ field: "skippedViolationIds", from: previousIds, to: violationIds }],
+    });
     release.markModified("skipped");
     await release.save();
 
@@ -374,9 +421,14 @@ export const skipAllViolations = async (req, res) => {
     const { month, skipAll = true } = req.body;
     if (!month) return res.status(400).json({ success: false, message: "month required" });
 
+    const by = actorDetails(req);
     const release = await getRelease(month);
+    const previousSkipAll = !!release.skipAllForEveryone;
     release.skipAllForEveryone = !!skipAll;
-    release.updatedBy = req.user?.employeeId ?? null;
+    release.updatedBy = actorLabel(by);
+    logActivity(release, "SKIP_ALL_VIOLATIONS_SET", by, {
+      changes: [{ field: "skipAllForEveryone", from: previousSkipAll, to: !!skipAll }],
+    });
     await release.save();
 
     return res.status(200).json({ success: true, skipAllForEveryone: release.skipAllForEveryone });
@@ -392,7 +444,7 @@ export const skipAllViolations = async (req, res) => {
 //   - employeeIds present       → release only those employees (selective)
 // Freeze one employee's current live slip into a new PayslipHistory version.
 // Marks any previous current version as not-current. Returns the new version #.
-async function snapshotEmployee(month, employeeId, by) {
+async function snapshotEmployee(month, employeeId, by, byDetails = null) {
   // Compute LIVE (bypass any existing snapshot overlay)
   const live = await buildPayroll(month, { employeeId, skipSnapshot: true });
   const emp = live.employees[0];
@@ -423,7 +475,7 @@ async function snapshotEmployee(month, employeeId, by) {
 
   await PayslipHistory.create({
     month, employeeId, version: nextVersion,
-    releasedAt: new Date(), releasedBy: by, isCurrent: true,
+    releasedAt: new Date(), releasedBy: by, releasedByDetails: byDetails, isCurrent: true,
     snapshot: emp,
     violationSnapshot,
     cycleLabel: live.window?.label ?? month,
@@ -438,7 +490,8 @@ export const releasePayroll = async (req, res) => {
 
     const release = await getRelease(month);
     const now = new Date();
-    const by = req.user?.employeeId ?? null;
+    const byDetails = actorDetails(req);
+    const by = actorLabel(byDetails);
 
     const upsertEmpState = (empId, patch) => {
       const idx = release.empState.findIndex((s) => s.employeeId === empId);
@@ -456,14 +509,29 @@ export const releasePayroll = async (req, res) => {
       release.released = true;
       release.releasedAt = now;
       release.releasedBy = by;
+      release.releasedByDetails = byDetails;
     }
 
     // Snapshot each target FIRST (freeze current live numbers), then mark released
+    const releasedVersions = {};
     for (const empId of targetIds) {
-      await snapshotEmployee(month, empId, by);
-      upsertEmpState(empId, { released: true, releasedAt: now, releasedBy: by });
+      const version = await snapshotEmployee(month, empId, by, byDetails);
+      if (version !== null) releasedVersions[empId] = version;
+      upsertEmpState(empId, {
+        released: true, releasedAt: now, releasedBy: by, releasedByDetails: byDetails,
+        // A fresh release supersedes any earlier revert marker on this entry
+        revertedAt: null, revertedBy: null, revertedByDetails: null,
+      });
     }
 
+    release.updatedBy = by;
+    logActivity(release, "RELEASED", byDetails, {
+      employeeIds: targetIds,
+      meta: {
+        scope: Array.isArray(employeeIds) && employeeIds.length > 0 ? "SELECTED" : "ALL",
+        versions: releasedVersions,
+      },
+    });
     release.markModified("empState");
     await release.save();
 
@@ -485,7 +553,8 @@ export const publishPayroll = async (req, res) => {
 
     const release = await getRelease(month);
     const now = new Date();
-    const by = req.user?.employeeId ?? null;
+    const byDetails = actorDetails(req);
+    const by = actorLabel(byDetails);
 
     // Determine which empState entries are eligible (released = true)
     const releasedEntries = release.empState.filter((s) => s.released);
@@ -504,7 +573,16 @@ export const publishPayroll = async (req, res) => {
       targets = releasedEntries;
     }
 
-    targets.forEach((s) => { s.published = true; s.publishedAt = now; s.publishedBy = by; });
+    targets.forEach((s) => {
+      s.published = true; s.publishedAt = now; s.publishedBy = by; s.publishedByDetails = byDetails;
+      // A fresh publish supersedes any earlier unpublish marker
+      s.unpublishedAt = null; s.unpublishedBy = null; s.unpublishedByDetails = null;
+    });
+    release.updatedBy = by;
+    logActivity(release, "PUBLISHED", byDetails, {
+      employeeIds: targets.map((s) => s.employeeId),
+      meta: { scope: Array.isArray(employeeIds) && employeeIds.length > 0 ? "SELECTED" : "ALL_RELEASED" },
+    });
     release.markModified("empState");
     await release.save();
 
@@ -522,15 +600,32 @@ export const unpublishPayroll = async (req, res) => {
     const { month, employeeIds } = req.body;
     if (!month) return res.status(400).json({ success: false, message: "month required" });
     const release = await getRelease(month);
+    const now = new Date();
+    const byDetails = actorDetails(req);
+    const by = actorLabel(byDetails);
+
+    const unpublishedIds = [];
+    const unpublish = (s) => {
+      if (s.published) {
+        unpublishedIds.push(s.employeeId);
+        s.unpublishedAt = now; s.unpublishedBy = by; s.unpublishedByDetails = byDetails;
+      }
+      s.published = false; s.publishedAt = null;
+    };
 
     if (Array.isArray(employeeIds) && employeeIds.length > 0) {
       const set = new Set(employeeIds);
       release.empState.forEach((s) => {
-        if (set.has(s.employeeId)) { s.published = false; s.publishedAt = null; }
+        if (set.has(s.employeeId)) unpublish(s);
       });
     } else {
-      release.empState.forEach((s) => { s.published = false; s.publishedAt = null; });
+      release.empState.forEach((s) => unpublish(s));
     }
+    release.updatedBy = by;
+    logActivity(release, "UNPUBLISHED", byDetails, {
+      employeeIds: unpublishedIds,
+      meta: { scope: Array.isArray(employeeIds) && employeeIds.length > 0 ? "SELECTED" : "ALL" },
+    });
     release.markModified("empState");
     await release.save();
     return res.status(200).json({ success: true, month });
@@ -562,13 +657,20 @@ export const setManualWorkedDays = async (req, res) => {
       if (value > 30) value = 30;
     }
 
+    const by = actorDetails(req);
     const release = await getRelease(month);
     const idx = release.empState.findIndex((s) => s.employeeId === employeeId);
+    const previousValue = idx >= 0 ? (release.empState[idx].manualWorkedDays ?? null) : null;
     if (idx >= 0) {
       release.empState[idx].manualWorkedDays = value;
     } else {
       release.empState.push({ employeeId, manualWorkedDays: value });
     }
+    release.updatedBy = actorLabel(by);
+    logActivity(release, value === null ? "MANUAL_WORKED_DAYS_CLEARED" : "MANUAL_WORKED_DAYS_SET", by, {
+      employeeId,
+      changes: [{ field: "manualWorkedDays", from: previousValue, to: value }],
+    });
     // Force Mongoose to persist the nested-array change.
     release.markModified("empState");
     await release.save();
@@ -607,6 +709,12 @@ export const addManualViolation = async (req, res) => {
       dayCost: cost,
     };
     release.empState[idx].manualViolations.push(entry);
+    const by = actorDetails(req);
+    release.updatedBy = actorLabel(by);
+    logActivity(release, "MANUAL_VIOLATION_ADDED", by, {
+      employeeId,
+      changes: [{ field: "manualViolations", from: null, to: entry }],
+    });
     release.markModified("empState");
     await release.save();
 
@@ -633,8 +741,17 @@ export const removeManualViolation = async (req, res) => {
     const release = await getRelease(month);
     const idx = release.empState.findIndex((s) => s.employeeId === employeeId);
     if (idx >= 0 && release.empState[idx].manualViolations) {
+      const removed = release.empState[idx].manualViolations.find((mv) => mv.id === violationId) ?? null;
       release.empState[idx].manualViolations =
         release.empState[idx].manualViolations.filter((mv) => mv.id !== violationId);
+      if (removed) {
+        const by = actorDetails(req);
+        release.updatedBy = actorLabel(by);
+        logActivity(release, "MANUAL_VIOLATION_REMOVED", by, {
+          employeeId,
+          changes: [{ field: "manualViolations", from: removed, to: null }],
+        });
+      }
       release.markModified("empState");
       await release.save();
     }
@@ -651,6 +768,9 @@ export const unreleasePayroll = async (req, res) => {
     const { month, employeeIds } = req.body;
     if (!month) return res.status(400).json({ success: false, message: "month required" });
     const release = await getRelease(month);
+    const now = new Date();
+    const byDetails = actorDetails(req);
+    const by = actorLabel(byDetails);
 
     if (Array.isArray(employeeIds) && employeeIds.length > 0) {
       // If a global release was in effect, materialize it into per-employee
@@ -669,32 +789,48 @@ export const unreleasePayroll = async (req, res) => {
         const idx = release.empState.findIndex((s) => s.employeeId === empId);
         if (idx >= 0) {
           release.empState[idx].released = false; release.empState[idx].releasedAt = null;
+          release.empState[idx].revertedAt = now;
+          release.empState[idx].revertedBy = by;
+          release.empState[idx].revertedByDetails = byDetails;
           // Reverting stage 1 must also revoke stage 2 (can't be visible if not released)
           release.empState[idx].published = false; release.empState[idx].publishedAt = null;
         } else {
-          release.empState.push({ employeeId: empId, released: false });
+          release.empState.push({ employeeId: empId, released: false, revertedAt: now, revertedBy: by, revertedByDetails: byDetails });
         }
       }
       release.markModified("empState");
       // Mark each reverted employee's current snapshot as reverted (keep history)
-      const by = req.user?.employeeId ?? null;
       await PayslipHistory.updateMany(
         { month, employeeId: { $in: employeeIds }, isCurrent: true },
-        { $set: { isCurrent: false, revertedAt: new Date(), revertedBy: by } }
+        { $set: { isCurrent: false, revertedAt: now, revertedBy: by, revertedByDetails: byDetails } }
       );
+      release.updatedBy = by;
+      logActivity(release, "REVERTED", byDetails, {
+        employeeIds,
+        meta: { scope: "SELECTED" },
+      });
     } else {
       release.released = false;
+      const revertedIds = [];
       release.empState.forEach((s) => {
+        if (s.released) {
+          revertedIds.push(s.employeeId);
+          s.revertedAt = now; s.revertedBy = by; s.revertedByDetails = byDetails;
+        }
         s.released = false; s.releasedAt = null;
         s.published = false; s.publishedAt = null;
       });
       release.markModified("empState");
       // Revert ALL current snapshots for the month (keep history)
-      const by = req.user?.employeeId ?? null;
       await PayslipHistory.updateMany(
         { month, isCurrent: true },
-        { $set: { isCurrent: false, revertedAt: new Date(), revertedBy: by } }
+        { $set: { isCurrent: false, revertedAt: now, revertedBy: by, revertedByDetails: byDetails } }
       );
+      release.updatedBy = by;
+      logActivity(release, "REVERTED", byDetails, {
+        employeeIds: revertedIds,
+        meta: { scope: "ALL" },
+      });
     }
     await release.save();
     return res.status(200).json({ success: true, month });
@@ -954,6 +1090,37 @@ export const generatePayrollReport = async (req, res) => {
   }
 };
 
+// ─── GET /api/payroll/activity?month=YYYY-MM&employeeId= ──────────────────────
+// HR/Admin — full audit trail of payroll actions for a month, newest first.
+// Each entry: { action, employeeId | employeeIds, changes: [{field, from, to}],
+//               meta, by: {userId, name, email, role, phoneNumber}, at }
+// Optional employeeId filter also matches bulk entries that include that id.
+export const getPayrollActivityLog = async (req, res) => {
+  try {
+    const month = req.query.month || dayjs.utc().format("YYYY-MM");
+    const { employeeId } = req.query;
+
+    const release = await PayrollRelease.findOne({ month }).select("activityLog").lean();
+    let entries = release?.activityLog ?? [];
+
+    if (employeeId) {
+      entries = entries.filter(
+        (e) =>
+          e.employeeId === employeeId ||
+          (Array.isArray(e.employeeIds) && e.employeeIds.includes(employeeId))
+      );
+    }
+
+    // Newest first
+    entries = [...entries].sort((a, b) => new Date(b.at) - new Date(a.at));
+
+    return res.status(200).json({ success: true, month, total: entries.length, activities: entries });
+  } catch (err) {
+    console.error("getPayrollActivityLog Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ─── GET /api/payroll/history?month=&employeeId= ──────────────────────────────
 // HR/Admin — per-employee version history (all snapshots, newest first).
 export const getEmployeePayslipHistory = async (req, res) => {
@@ -970,8 +1137,10 @@ export const getEmployeePayslipHistory = async (req, res) => {
       isCurrent: h.isCurrent,
       releasedAt: h.releasedAt,
       releasedBy: h.releasedBy,
+      releasedByDetails: h.releasedByDetails ?? null,
       revertedAt: h.revertedAt,
       revertedBy: h.revertedBy,
+      revertedByDetails: h.revertedByDetails ?? null,
       cycleLabel: h.cycleLabel,
       netSalary: h.snapshot?.pay?.netSalary ?? null,
       workedDays: h.snapshot?.pay?.workedDays ?? null,
@@ -1008,7 +1177,11 @@ export const getMonthPayslipHistory = async (req, res) => {
         isReleased: !!current,
         latestNet: latest.snapshot?.pay?.netSalary ?? null,
         lastReleasedAt: latest.releasedAt,
+        lastReleasedBy: latest.releasedBy ?? null,
+        lastReleasedByDetails: latest.releasedByDetails ?? null,
         lastRevertedAt: latest.revertedAt,
+        lastRevertedBy: latest.revertedBy ?? null,
+        lastRevertedByDetails: latest.revertedByDetails ?? null,
       };
     });
 

@@ -1,3 +1,5 @@
+import './config/auditPlugin.js' // ⬅ must be FIRST: registers global createdBy/updatedBy audit plugin before models compile
+import { auditContextMiddleware } from './config/auditContext.js'
 import express from 'express'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
@@ -60,6 +62,9 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
+
+// Audit context — lets mongoose know which HR/Admin performed each action
+app.use(auditContextMiddleware);
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use("/public", express.static("public"));

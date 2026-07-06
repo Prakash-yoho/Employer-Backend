@@ -18,6 +18,7 @@ import {
   downloadMonthViolationReport,
   generatePayrollReport,
   getReportEmployees,
+  getPayrollActivityLog,
   getEmployeePayslipHistory,
   getMonthPayslipHistory,
   downloadHistoricalPayslip,
@@ -43,6 +44,9 @@ router.post("/payroll/manual-violation/remove", authenticate, authorize(["EMPLOY
 // ── Reports (HR/Admin) ──
 router.get("/payroll/report-employees", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getReportEmployees);
 router.post("/payroll/report", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), generatePayrollReport);
+
+// ── Payroll activity log (HR/Admin) — who did what, when, and what changed ──
+router.get("/payroll/activity", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getPayrollActivityLog);
 
 // ── Payslip history (HR/Admin) ──
 router.get("/payroll/history", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), getEmployeePayslipHistory);

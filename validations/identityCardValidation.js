@@ -6,4 +6,5 @@ export const idCardReportQuerySchema = Joi.object({
         .messages({ 'date.min': 'endDate must be on or after startDate' }),
     status: Joi.string().valid('all', 'active', 'expired', 'not_generated').default('all'),
     department: Joi.string().trim().allow('', null).optional(),
+    employeeIds: Joi.string().trim().allow('', null).optional(),
 });

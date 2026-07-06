@@ -29,12 +29,26 @@ const empStateSchema = new mongoose.Schema(
     released:   { type: Boolean, default: false },
     releasedAt: { type: Date, default: null },
     releasedBy: { type: String, default: null },
+    // Full details of the HR/Admin who released: { userId, name, email, role, phoneNumber }
+    releasedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
+
+    // Revert (unrelease) tracking
+    revertedAt: { type: Date, default: null },
+    revertedBy: { type: String, default: null },
+    revertedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
 
     // Stage 2 — "Published": employee can now see/download their slip.
     // Only allowed once `released` is true.
     published:   { type: Boolean, default: false },
     publishedAt: { type: Date, default: null },
     publishedBy: { type: String, default: null },
+    // Full details of the HR/Admin who published
+    publishedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
+
+    // Unpublish (revoke visibility) tracking
+    unpublishedAt: { type: Date, default: null },
+    unpublishedBy: { type: String, default: null },
+    unpublishedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
 
     // Manual worked-days override. When not null, it REPLACES the auto
     // (standardDays − LOP − violationDayCost) calculation entirely.
@@ -68,6 +82,7 @@ const payrollReleaseSchema = new mongoose.Schema(
     released:   { type: Boolean, default: false },
     releasedAt: { type: Date, default: null },
     releasedBy: { type: String, default: null },
+    releasedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
 
     // Per-employee skipped violations
     skipped: { type: [skippedViolationSchema], default: [] },
@@ -78,6 +93,40 @@ const payrollReleaseSchema = new mongoose.Schema(
     skipAllForEveryone: { type: Boolean, default: false },
 
     updatedBy: { type: String, default: null },
+
+    // ── Payroll activity log ─────────────────────────────────────────────────
+    // One entry per HR/Admin action on this month's payroll. `by` holds the
+    // full actor details and `changes` holds field-level { field, from, to }
+    // diffs so you can always see exactly WHAT was changed and BY WHOM.
+    activityLog: {
+      type: [
+        new mongoose.Schema(
+          {
+            action:      { type: String, required: true }, // RELEASED | REVERTED | PUBLISHED | UNPUBLISHED | ...
+            employeeId:  { type: String, default: null },  // single-employee actions
+            employeeIds: { type: [String], default: undefined }, // bulk actions
+            changes: {
+              type: [
+                new mongoose.Schema(
+                  {
+                    field: { type: String, required: true },
+                    from:  { type: mongoose.Schema.Types.Mixed, default: null },
+                    to:    { type: mongoose.Schema.Types.Mixed, default: null },
+                  },
+                  { _id: false }
+                ),
+              ],
+              default: [],
+            },
+            meta: { type: mongoose.Schema.Types.Mixed, default: null },   // extra context (version, scope, ...)
+            by:   { type: mongoose.Schema.Types.Mixed, default: null },   // { userId, name, email, role, phoneNumber }
+            at:   { type: Date, default: Date.now },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );

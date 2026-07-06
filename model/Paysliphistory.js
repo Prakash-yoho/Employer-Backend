@@ -18,8 +18,12 @@ const payslipHistorySchema = new mongoose.Schema(
     // Lifecycle
     releasedAt: { type: Date, default: Date.now },
     releasedBy: { type: String, default: null },
+    // Full details of the HR/Admin who released this version
+    releasedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
     revertedAt: { type: Date, default: null },                // set when this version is reverted
     revertedBy: { type: String, default: null },
+    // Full details of the HR/Admin who reverted this version
+    revertedByDetails: { type: mongoose.Schema.Types.Mixed, default: null },
     isCurrent:  { type: Boolean, default: true },             // the active released snapshot
 
     // Frozen slip payload — the COMPLETE per-employee buildPayroll object

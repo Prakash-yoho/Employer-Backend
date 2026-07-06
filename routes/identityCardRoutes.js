@@ -7,6 +7,7 @@ import {
     getMyIdCard,
     getIdCardReport,
     exportIdCardReport,
+    exportIdCardsPdf,
     verifyIdCardByToken
 } from '../controllers/identityCardController.js';
 import { authenticate, authorize, authenticateEmployee } from '../middleware/authMiddleware.js';
@@ -20,6 +21,8 @@ router.get('/me', authenticateEmployee, getMyIdCard);
 
 router.get('/report', authenticate, authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), getIdCardReport);
 router.get('/report/export', authenticate, authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), exportIdCardReport);
+
+router.get('/report/export-pdf', authenticate, authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), exportIdCardsPdf);
 
 router.get('/', authenticate, authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), getEmployeesForIdCard);
 router.get('/:id/preview', authenticate, authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), previewIdCard);
