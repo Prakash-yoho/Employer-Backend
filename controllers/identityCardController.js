@@ -106,6 +106,55 @@ const drawWaveBand = (doc, x, y, width, height, flip = false) => {
     doc.restore();
 };
 
+// Minimal vector icon glyphs drawn directly with PDFKit — no external assets needed
+const drawIcon = (doc, type, x, y, size, color) => {
+    doc.save();
+    doc.fillColor(color).strokeColor(color).lineWidth(0.6);
+    const s = size;
+
+    switch (type) {
+        case 'id':
+            doc.roundedRect(x, y, s, s * 0.7, 1).stroke();
+            doc.moveTo(x + s * 0.2, y + s * 0.25).lineTo(x + s * 0.5, y + s * 0.25).stroke();
+            doc.moveTo(x + s * 0.2, y + s * 0.45).lineTo(x + s * 0.7, y + s * 0.45).stroke();
+            break;
+        case 'calendar':
+            doc.roundedRect(x, y, s, s * 0.85, 1).stroke();
+            doc.moveTo(x, y + s * 0.25).lineTo(x + s, y + s * 0.25).stroke();
+            doc.moveTo(x + s * 0.2, y - s * 0.1).lineTo(x + s * 0.2, y + s * 0.15).stroke();
+            doc.moveTo(x + s * 0.8, y - s * 0.1).lineTo(x + s * 0.8, y + s * 0.15).stroke();
+            break;
+        case 'drop':
+            doc.moveTo(x + s / 2, y)
+                .bezierCurveTo(x + s, y + s * 0.6, x + s * 0.8, y + s, x + s / 2, y + s)
+                .bezierCurveTo(x + s * 0.2, y + s, x, y + s * 0.6, x + s / 2, y)
+                .fill();
+            break;
+        case 'mail':
+            doc.rect(x, y, s, s * 0.7).stroke();
+            doc.moveTo(x, y).lineTo(x + s / 2, y + s * 0.45).lineTo(x + s, y).stroke();
+            break;
+        case 'globe':
+            doc.circle(x + s / 2, y + s * 0.4, s / 2.2).stroke();
+            doc.moveTo(x + s * 0.05, y + s * 0.4).lineTo(x + s * 0.95, y + s * 0.4).stroke();
+            doc.save();
+            doc.translate(x + s / 2, y + s * 0.4);
+            doc.scale(0.42, 1);
+            doc.circle(0, 0, s / 2.2).stroke();
+            doc.restore();
+            break;
+        case 'pin':
+            doc.save();
+            doc.translate(x + s / 2, y + s * 0.35);
+            doc.circle(0, 0, s / 2.6).stroke();
+            doc.circle(0, 0, s / 7).fill();
+            doc.restore();
+            doc.moveTo(x + s * 0.32, y + s * 0.62).lineTo(x + s / 2, y + s * 0.9).lineTo(x + s * 0.68, y + s * 0.62).stroke();
+            break;
+    }
+    doc.restore();
+};
+
 
 // GET /api/identity-cards
 export const getEmployeesForIdCard = async (req, res) => {
@@ -636,6 +685,18 @@ export const exportIdCardsPdf = async (req, res) => {
         const doc = new PDFDocument({ size: [CARD_W, CARD_H], margin: 0, autoFirstPage: false });
         doc.pipe(res);
 
+        // ── Fonts — embed NotoSans so the PDF matches the web app's typography ──
+        const FONT_REGULAR_PATH = path.join(__dirname, '../public/fonts/NotoSans-Regular.ttf');
+        const FONT_BOLD_PATH = path.join(__dirname, '../public/fonts/NotoSans-Bold.ttf');
+        const fontsAvailable = fs.existsSync(FONT_REGULAR_PATH) && fs.existsSync(FONT_BOLD_PATH);
+
+        if (fontsAvailable) {
+            doc.registerFont('Body', FONT_REGULAR_PATH);
+            doc.registerFont('Body-Bold', FONT_BOLD_PATH);
+        }
+        const FONT_REGULAR = fontsAvailable ? 'Body' : 'Helvetica';
+        const FONT_BOLD = fontsAvailable ? 'Body-Bold' : 'Helvetica-Bold';
+
         const logoPath = path.join(__dirname, '../public/companylogo.png');
         const logoExists = fs.existsSync(logoPath);
         const verifyBase = process.env.ID_VERIFY_BASE_URL || '';
@@ -669,7 +730,7 @@ export const exportIdCardsPdf = async (req, res) => {
             if (logoExists) {
                 doc.image(logoPath, CARD_W / 2 - 20, 8, { width: 40 });
             } else {
-                doc.fontSize(8).fillColor(PDF_NAVY).font('Helvetica-Bold')
+                doc.fontSize(8).fillColor(PDF_NAVY).font(FONT_BOLD)
                     .text('KIAQ TECHNOLOGIES', 0, 14, { width: CARD_W, align: 'center' });
             }
             drawWaveBand(doc, 0, 30, CARD_W, 8);
@@ -693,15 +754,30 @@ export const exportIdCardsPdf = async (req, res) => {
             doc.restore();
             doc.roundedRect(photoX, photoY, photoSize, photoSize, 6).lineWidth(0.5).stroke('#e0e0e0');
 
-            doc.fontSize(10).fillColor('#111827').font('Helvetica-Bold')
+            doc.fontSize(10).fillColor('#111827').font(FONT_BOLD)
                 .text(`${employee.firstName} ${employee.lastName}`.toUpperCase(), 6, photoY + photoSize + 8, { width: CARD_W - 12, align: 'center' });
 
-            doc.fontSize(6).fillColor('#4b5563').font('Helvetica')
-                .text(employee.officialEmail || PRINT_COMPANY_EMAIL, 6, photoY + photoSize + 21, { width: CARD_W - 12, align: 'center' })
-                .text(PRINT_COMPANY_WEBSITE, 6, photoY + photoSize + 31, { width: CARD_W - 12, align: 'center' });
+            const lineHeightSmall = doc.font(FONT_REGULAR).fontSize(6).currentLineHeight();
+
+            const emailText = employee.officialEmail || PRINT_COMPANY_EMAIL;
+            const emailWidth = doc.widthOfString(emailText);
+            const emailTextY = photoY + photoSize + 21;
+            const emailIconSize = 6;
+            const emailIconX = (CARD_W - emailWidth) / 2 - emailIconSize - 3;
+            const emailIconY = emailTextY + (lineHeightSmall - emailIconSize) / 2;
+            drawIcon(doc, 'mail', emailIconX, emailIconY, emailIconSize, PDF_RED);
+            doc.fillColor('#4b5563')
+                .text(emailText, 6, emailTextY, { width: CARD_W - 12, align: 'center' });
+
+            const websiteWidth = doc.widthOfString(PRINT_COMPANY_WEBSITE);
+            const websiteTextY = photoY + photoSize + 31;
+            const websiteIconX = (CARD_W - websiteWidth) / 2 - emailIconSize - 3;
+            const websiteIconY = websiteTextY + (lineHeightSmall - emailIconSize) / 2;
+            drawIcon(doc, 'globe', websiteIconX, websiteIconY, emailIconSize, PDF_RED);
+            doc.text(PRINT_COMPANY_WEBSITE, 6, websiteTextY, { width: CARD_W - 12, align: 'center' });
 
             drawWaveBand(doc, 0, CARD_H - 38, CARD_W, 8, true);
-            doc.fontSize(5).fillColor('#9ca3af')
+            doc.fontSize(5).fillColor('#9ca3af').font(FONT_REGULAR)
                 .text(employee.idCard?.idCardNumber || '-', 0, CARD_H - 12, { width: CARD_W, align: 'center' });
 
             // ── BACK ───────────────────────────────────────────────
@@ -709,34 +785,47 @@ export const exportIdCardsPdf = async (req, res) => {
             drawWaveBand(doc, 0, 0, CARD_W, 8);
 
             let cursorY = 16;
-            const fieldRow = (value) => {
-                doc.fontSize(7).fillColor('#374151').font('Helvetica')
-                    .text(value || '-', 10, cursorY, { width: CARD_W - 20 });
-                doc.moveTo(10, cursorY + 10).lineTo(CARD_W - 10, cursorY + 10).lineWidth(0.5).strokeColor('#e5e7eb').stroke();
-                cursorY += 14;
+            const backLineHeight7 = doc.font(FONT_REGULAR).fontSize(7).currentLineHeight();
+            const fieldRow = (iconType, value) => {
+                const iconSize = 7;
+                const iconY = cursorY + (backLineHeight7 - iconSize) / 2;
+                drawIcon(doc, iconType, 10, iconY, iconSize, PDF_RED);
+                doc.fontSize(7).fillColor('#374151').font(FONT_REGULAR)
+                    .text(value || '-', 24, cursorY, { width: CARD_W - 34 });
+                doc.moveTo(10, cursorY + 12).lineTo(CARD_W - 10, cursorY + 12).lineWidth(0.5).strokeColor('#e5e7eb').stroke();
+                cursorY += 16;
             };
-            fieldRow(employee.employeeId);
-            fieldRow(employee.doj ? dayjs(employee.doj).format('DD/MM/YYYY') : null);
-            fieldRow(employee.bloodGroup);
+            fieldRow('id', employee.employeeId);
+            fieldRow('calendar', employee.doj ? dayjs(employee.doj).format('DD/MM/YYYY') : null);
+            fieldRow('drop', employee.bloodGroup);
 
             cursorY += 4;
             doc.rect(10, cursorY, CARD_W - 20, 14).fill(PDF_NAVY);
-            doc.fontSize(6).fillColor('#ffffff').font('Helvetica-Bold')
+            doc.fontSize(6).fillColor('#ffffff').font(FONT_BOLD)
                 .text(`EMERGENCY: ${employee.personalMobile || PRINT_COMPANY_EMERGENCY_NO}`, 10, cursorY + 4, { width: CARD_W - 20, align: 'center' });
             cursorY += 22;
 
-            doc.fontSize(6).fillColor('#4b5563').font('Helvetica')
-                .text(PRINT_COMPANY_EMAIL, 10, cursorY, { width: CARD_W - 20 });
-            cursorY += 8;
-            doc.text(PRINT_COMPANY_WEBSITE, 10, cursorY, { width: CARD_W - 20 });
-            cursorY += 8;
-            doc.fontSize(5.5).text(PRINT_COMPANY_ADDRESS.join('\n'), 10, cursorY, { width: CARD_W - 20 });
+            const backLineHeight6 = doc.font(FONT_REGULAR).fontSize(6).currentLineHeight();
+            const contactIconSize = 6;
+            const contactIconY = () => cursorY + (backLineHeight6 - contactIconSize) / 2;
+
+            drawIcon(doc, 'mail', 10, contactIconY(), contactIconSize, PDF_RED);
+            doc.fontSize(6).fillColor('#4b5563').font(FONT_REGULAR)
+                .text(PRINT_COMPANY_EMAIL, 22, cursorY, { width: CARD_W - 32 });
+            cursorY += 9;
+
+            drawIcon(doc, 'globe', 10, contactIconY(), contactIconSize, PDF_RED);
+            doc.text(PRINT_COMPANY_WEBSITE, 22, cursorY, { width: CARD_W - 32 });
+            cursorY += 9;
+
+            drawIcon(doc, 'pin', 10, contactIconY(), contactIconSize, PDF_RED);
+            doc.fontSize(5.5).text(PRINT_COMPANY_ADDRESS.join('\n'), 22, cursorY, { width: CARD_W - 32 });
             cursorY += 28;
 
             if (qrBuffer) {
                 const qrSize = 46;
                 doc.image(qrBuffer, (CARD_W - qrSize) / 2, cursorY, { width: qrSize, height: qrSize });
-                doc.fontSize(5).fillColor('#9ca3af')
+                doc.fontSize(5).fillColor('#9ca3af').font(FONT_REGULAR)
                     .text('Scan to verify', 0, cursorY + qrSize + 3, { width: CARD_W, align: 'center' });
             }
 
