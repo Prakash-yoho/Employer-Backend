@@ -5,16 +5,21 @@ import {
     updateTicketSchema,
     resolveTicketSchema,
     forwardToITSchema,
-    getTicketsQuerySchema
+    getTicketsQuerySchema,
+    askQuestionSchema,
+    answerQuestionSchema
 } from '../validations/ticketValidation.js';
 import EmployerUser from '../model/EmployerUser.js';
 import NotificationService from '../services/notificationService.js';
 import Notification from '../model/Notification.js';
+import {
+    uploadTicketAttachmentToS3,
+    getTicketAttachmentPresignedUrl
+} from '../utils/saveTicketAttachmentsInS3.js';
 
 // Create new ticket (Employee only)
 export const createTicket = async (req, res) => {
     try {
-        // Validate request body
         const { error, value } = createTicketSchema.validate(req.body);
         if (error) {
             return res.status(400).json({
@@ -26,7 +31,6 @@ export const createTicket = async (req, res) => {
 
         const { category, priority, subject, description } = value;
 
-        // Check if employee exists
         const employee = await Employee.findById(req.user._id);
         if (!employee) {
             return res.status(404).json({
@@ -35,10 +39,16 @@ export const createTicket = async (req, res) => {
             });
         }
 
-        // Generate ticket ID
         const ticketId = await Ticket.generateTicketId();
 
-        // Create ticket with initial activity log
+        // NEW: upload any attached screenshots/files to S3
+        let attachments = [];
+        if (req.files && req.files.length > 0) {
+            attachments = await Promise.all(
+                req.files.map((file) => uploadTicketAttachmentToS3(file))
+            );
+        }
+
         const ticket = new Ticket({
             ticketId,
             category,
@@ -47,8 +57,10 @@ export const createTicket = async (req, res) => {
             description,
             raisedBy: req.user._id,
             status: 'OPEN',
+            attachments,
             activityLogs: [{
                 action: 'Ticket created',
+                type: 'SYSTEM',
                 performedBy: req.user._id,
                 performedByModel: 'Employee',
                 comment: 'Ticket submitted by employee',
@@ -56,7 +68,6 @@ export const createTicket = async (req, res) => {
             }]
         });
 
-        // Save ticket
         await ticket.save();
 
         let notifyRoles = ['EMPLOYER_ADMIN', 'EMPLOYER_HR'];
@@ -72,7 +83,6 @@ export const createTicket = async (req, res) => {
 
         await NotificationService.createTicketCreatedNotification(ticket, hrItUsers);
 
-        // Populate raisedBy details
         await ticket.populate('raisedBy', 'firstName lastName employeeId officialEmail department');
 
         return res.status(201).json({
@@ -86,10 +96,8 @@ export const createTicket = async (req, res) => {
     } catch (error) {
         console.error('Create ticket error:', error);
 
-        // Handle duplicate ticketId error
         if (error.code === 11000 && error.keyPattern && error.keyPattern.ticketId) {
             try {
-                // Retry with new ticket ID
                 console.log('Duplicate ticketId detected, retrying...');
                 return await createTicket(req, res);
             } catch (retryError) {
@@ -108,7 +116,6 @@ export const createTicket = async (req, res) => {
 // Get my tickets (Employee only)
 export const getMyTickets = async (req, res) => {
     try {
-        // Validate query parameters
         const { error, value } = getTicketsQuerySchema.validate(req.query);
         if (error) {
             return res.status(400).json({
@@ -121,20 +128,18 @@ export const getMyTickets = async (req, res) => {
         const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = value;
         const skip = (page - 1) * limit;
 
-        // Build filter
         const filter = { raisedBy: req.user._id };
 
-        // Build sort
         const sort = {};
         sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
-        // Execute query
         const [tickets, total] = await Promise.all([
             Ticket.find(filter)
                 .populate('raisedBy', 'firstName lastName employeeId officialEmail department')
                 .populate('assignedTo', 'firstName lastName email role')
                 .populate('forwardedTo', 'firstName lastName email role')
                 .populate('resolvedBy', 'firstName lastName email role')
+                .populate('activityLogs.performedBy', 'firstName lastName employeeId email role')
                 .sort(sort)
                 .skip(skip)
                 .limit(limit),
@@ -143,7 +148,6 @@ export const getMyTickets = async (req, res) => {
 
         const totalPages = Math.ceil(total / limit);
 
-        // Calculate statistics
         const stats = {
             total,
             open: await Ticket.countDocuments({ ...filter, status: 'OPEN' }),
@@ -180,7 +184,6 @@ export const getMyTickets = async (req, res) => {
 // Get all tickets (HR/Admin/IT Support)
 export const getAllTickets = async (req, res) => {
     try {
-        // Check user role
         const allowedRoles = ['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT'];
         if (!allowedRoles.includes(req.user.role)) {
             return res.status(403).json({
@@ -189,7 +192,6 @@ export const getAllTickets = async (req, res) => {
             });
         }
 
-        // Validate query parameters
         const { error, value } = getTicketsQuerySchema.validate(req.query);
         if (error) {
             return res.status(400).json({
@@ -202,10 +204,8 @@ export const getAllTickets = async (req, res) => {
         const { page = 1, limit = 10, category, sortBy = 'createdAt', sortOrder = 'desc' } = value;
         const skip = (page - 1) * limit;
 
-        // Build filter based on user role
         let filter = {};
 
-        // IT Support can only see TECHNICAL_ISSUE and IT_ASSET tickets assigned to them
         if (req.user.role === 'EMPLOYER_IT') {
             filter = {
                 $and: [
@@ -220,11 +220,9 @@ export const getAllTickets = async (req, res) => {
             };
         }
 
-        // Build sort
         const sort = {};
         sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
-        // Execute query
         const [tickets, total] = await Promise.all([
             Ticket.find(filter)
                 .populate('raisedBy', 'firstName lastName employeeId officialEmail department')
@@ -239,7 +237,6 @@ export const getAllTickets = async (req, res) => {
 
         const totalPages = Math.ceil(total / limit);
 
-        // Calculate statistics
         const stats = {
             total,
             open: await Ticket.countDocuments({ ...filter, status: 'OPEN' }),
@@ -288,7 +285,6 @@ export const getTicketById = async (req, res) => {
     try {
         const { ticketId } = req.params;
 
-        // Find ticket
         const ticket = await Ticket.findOne({ ticketId })
             .populate('raisedBy', 'firstName lastName employeeId officialEmail department')
             .populate('assignedTo', 'firstName lastName email role')
@@ -303,7 +299,6 @@ export const getTicketById = async (req, res) => {
             });
         }
 
-        // Check access permissions
         const allowedRoles = ['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT'];
         const isEmployeeOwner = ticket.raisedBy._id.toString() === req.user._id.toString();
         const isAssignedToUser = ticket.assignedTo && ticket.assignedTo._id.toString() === req.user._id.toString();
@@ -317,7 +312,6 @@ export const getTicketById = async (req, res) => {
             });
         }
 
-        // IT Support can only access TECHNICAL_ISSUE and IT_ASSET tickets assigned to them
         if (req.user.role === 'EMPLOYER_IT') {
             if (!['TECHNICAL_ISSUE', 'IT_ASSET'].includes(ticket.category) ||
                 (!isForwardedToUser && !isAssignedToUser)) {
@@ -346,10 +340,9 @@ export const getTicketById = async (req, res) => {
     }
 };
 
-// Update ticket (HR/Admin only - can update priority, assign, forward)
+// Update ticket (HR/Admin only - can update priority, assign, forward, resolve)
 export const updateTicket = async (req, res) => {
     try {
-        // Check user role
         const allowedRoles = ['EMPLOYER_ADMIN', 'EMPLOYER_HR'];
         if (!allowedRoles.includes(req.user.role)) {
             return res.status(403).json({
@@ -360,7 +353,6 @@ export const updateTicket = async (req, res) => {
 
         const { ticketId } = req.params;
 
-        // Validate request body
         const { error, value } = updateTicketSchema.validate(req.body);
         if (error) {
             return res.status(400).json({
@@ -370,7 +362,6 @@ export const updateTicket = async (req, res) => {
             });
         }
 
-        // Find ticket
         let ticket = await Ticket.findOne({ ticketId });
         if (!ticket) {
             return res.status(404).json({
@@ -379,7 +370,6 @@ export const updateTicket = async (req, res) => {
             });
         }
 
-        // Check if ticket is already resolved
         if (ticket.status === 'RESOLVED') {
             return res.status(400).json({
                 success: false,
@@ -387,11 +377,9 @@ export const updateTicket = async (req, res) => {
             });
         }
 
-        // Track changes for activity log
         const changes = [];
         const previousValues = {};
 
-        // Update fields if provided
         if (value?.priority && value?.priority !== ticket.priority) {
             previousValues.priority = ticket.priority;
             ticket.priority = value.priority;
@@ -410,17 +398,14 @@ export const updateTicket = async (req, res) => {
             ticket.status = value?.status;
 
             if (value?.status === 'RESOLVED') {
-                if (!value?.resolvedComment) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Resolved comment is required when resolving a ticket'
-                    });
-                }
-                ticket.resolvedComment = value?.resolvedComment;
+                // NOTE: comment is now OPTIONAL — default text used if not provided
+                ticket.resolvedComment = value?.resolvedComment?.trim()
+                    ? value.resolvedComment.trim()
+                    : 'Ticket resolved.';
                 ticket.resolvedBy = req.user._id;
                 ticket.resolvedByModel = 'EmployerUser';
                 ticket.resolvedAt = new Date();
-                ticket.assignedTo = req.user._id; // Auto-assign to resolver
+                ticket.assignedTo = req.user._id;
                 changes.push(`Ticket resolved by HR/Admin`);
             } else {
                 changes.push(`Status changed from ${previousValues.status} to ${value.status}`);
@@ -431,7 +416,6 @@ export const updateTicket = async (req, res) => {
             ticket.resolvedComment = value?.resolvedComment;
         }
 
-        // If no changes were made
         if (changes.length === 0) {
             return res.status(400).json({
                 success: false,
@@ -439,7 +423,6 @@ export const updateTicket = async (req, res) => {
             });
         }
 
-        // Add activity log for each change
         for (const change of changes) {
             await ticket.addActivityLog(
                 'Ticket updated',
@@ -449,18 +432,16 @@ export const updateTicket = async (req, res) => {
             );
         }
 
-        // Save ticket
         await ticket.save();
 
         if (value?.status === 'RESOLVED') {
-            // Notify employee about resolution
             await NotificationService.createTicketResolvedNotification(ticket, req.user);
         }
 
-        // Populate data
         await ticket.populate('raisedBy', 'firstName lastName employeeId officialEmail department');
         await ticket.populate('assignedTo', 'firstName lastName email role');
         await ticket.populate('resolvedBy', 'firstName lastName email role');
+        await ticket.populate('activityLogs.performedBy', 'firstName lastName employeeId email role');
 
         return res.status(200).json({
             success: true,
@@ -484,7 +465,6 @@ export const updateTicket = async (req, res) => {
 // Forward ticket to IT Support (HR/Admin only)
 export const forwardToITSupport = async (req, res) => {
     try {
-        // Check user role
         const allowedRoles = ['EMPLOYER_ADMIN', 'EMPLOYER_HR'];
         if (!allowedRoles.includes(req.user.role)) {
             return res.status(403).json({
@@ -495,7 +475,6 @@ export const forwardToITSupport = async (req, res) => {
 
         const { ticketId } = req.params;
 
-        // Validate request body
         const { error, value } = forwardToITSchema.validate(req.body);
         if (error) {
             return res.status(400).json({
@@ -507,7 +486,6 @@ export const forwardToITSupport = async (req, res) => {
 
         const { forwardedTo, comment } = value;
 
-        // Find ticket
         let ticket = await Ticket.findOne({ ticketId });
         if (!ticket) {
             return res.status(404).json({
@@ -516,7 +494,6 @@ export const forwardToITSupport = async (req, res) => {
             });
         }
 
-        // Check if ticket is already resolved
         if (ticket.status === 'RESOLVED') {
             return res.status(400).json({
                 success: false,
@@ -524,7 +501,6 @@ export const forwardToITSupport = async (req, res) => {
             });
         }
 
-        // Check if ticket is IT-related
         if (!['TECHNICAL_ISSUE', 'IT_ASSET'].includes(ticket.category)) {
             return res.status(400).json({
                 success: false,
@@ -532,12 +508,10 @@ export const forwardToITSupport = async (req, res) => {
             });
         }
 
-        // Update ticket
         ticket.forwardedTo = forwardedTo;
         ticket.status = 'IN_PROGRESS';
-        ticket.assignedTo = null; // Remove HR assignment when forwarding to IT
+        ticket.assignedTo = null;
 
-        // Add activity log
         await ticket.addActivityLog(
             'Ticket forwarded to IT Support',
             req.user._id,
@@ -545,10 +519,8 @@ export const forwardToITSupport = async (req, res) => {
             comment || `Ticket forwarded to IT Support for ${ticket.category}`
         );
 
-        // Save ticket
         await ticket.save();
 
-        // Notify IT support
         const itUsers = await EmployerUser.find({
             role: 'EMPLOYER_IT',
             isActive: true
@@ -572,7 +544,6 @@ export const forwardToITSupport = async (req, res) => {
             });
         }
 
-        // Populate data
         await ticket.populate('raisedBy', 'firstName lastName employeeId officialEmail department');
         await ticket.populate('forwardedTo', 'firstName lastName email role');
 
@@ -597,7 +568,6 @@ export const forwardToITSupport = async (req, res) => {
 // Resolve ticket as IT Support
 export const resolveTicketAsIT = async (req, res) => {
     try {
-        // Check user role
         if (req.user.role !== 'EMPLOYER_IT') {
             return res.status(403).json({
                 success: false,
@@ -607,7 +577,6 @@ export const resolveTicketAsIT = async (req, res) => {
 
         const { ticketId } = req.params;
 
-        // Validate request body
         const { error, value } = resolveTicketSchema.validate(req.body);
         if (error) {
             return res.status(400).json({
@@ -619,7 +588,6 @@ export const resolveTicketAsIT = async (req, res) => {
 
         const { resolvedComment } = value;
 
-        // Find ticket
         let ticket = await Ticket.findOne({ ticketId });
         if (!ticket) {
             return res.status(404).json({
@@ -628,7 +596,6 @@ export const resolveTicketAsIT = async (req, res) => {
             });
         }
 
-        // Check if ticket is assigned/forwarded to this IT user
         if (ticket.forwardedTo?.toString() !== req.user._id.toString() &&
             ticket.assignedTo?.toString() !== req.user._id.toString()) {
             return res.status(403).json({
@@ -637,7 +604,6 @@ export const resolveTicketAsIT = async (req, res) => {
             });
         }
 
-        // Check if ticket is IT-related
         if (!['TECHNICAL_ISSUE', 'IT_ASSET'].includes(ticket.category)) {
             return res.status(400).json({
                 success: false,
@@ -645,7 +611,6 @@ export const resolveTicketAsIT = async (req, res) => {
             });
         }
 
-        // Check if ticket is already resolved
         if (ticket.status === 'RESOLVED') {
             return res.status(400).json({
                 success: false,
@@ -653,28 +618,24 @@ export const resolveTicketAsIT = async (req, res) => {
             });
         }
 
-        // Update ticket
         ticket.status = 'RESOLVED';
-        ticket.resolvedComment = resolvedComment;
+        // NOTE: comment is optional now
+        ticket.resolvedComment = resolvedComment?.trim() ? resolvedComment.trim() : 'Ticket resolved by IT Support.';
         ticket.resolvedBy = req.user._id;
         ticket.resolvedByModel = 'EmployerUser';
         ticket.resolvedAt = new Date();
 
-        // Add activity log
         await ticket.addActivityLog(
             'Ticket resolved by IT Support',
             req.user._id,
             'EmployerUser',
-            resolvedComment
+            ticket.resolvedComment
         );
 
-        // Save ticket
         await ticket.save();
 
-        // Notify employee about resolution
         await NotificationService.createTicketResolvedNotification(ticket, req.user);
 
-        // Populate data
         await ticket.populate('raisedBy', 'firstName lastName employeeId officialEmail department');
         await ticket.populate('forwardedTo', 'firstName lastName email role');
         await ticket.populate('resolvedBy', 'firstName lastName email role');
@@ -697,16 +658,213 @@ export const resolveTicketAsIT = async (req, res) => {
     }
 };
 
+// NEW: HR/Admin/IT asks a question on a ticket (can be called any number of times)
+export const addQuestionToTicket = async (req, res) => {
+    try {
+        const allowedRoles = ['EMPLOYER_ADMIN', 'EMPLOYER_HR', 'EMPLOYER_IT'];
+        if (!allowedRoles.includes(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only ADMIN, HR or IT Support can ask questions on a ticket'
+            });
+        }
+
+        const { ticketId } = req.params;
+
+        const { error, value } = askQuestionSchema.validate(req.body);
+        if (error) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation error',
+                errors: error.details.map(detail => detail.message)
+            });
+        }
+
+        const ticket = await Ticket.findOne({ ticketId });
+        if (!ticket) {
+            return res.status(404).json({
+                success: false,
+                message: 'Ticket not found'
+            });
+        }
+
+        if (ticket.status === 'RESOLVED') {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot ask questions on a resolved ticket'
+            });
+        }
+
+        ticket.activityLogs.push({
+            action: 'Question raised',
+            type: 'QUESTION',
+            performedBy: req.user._id,
+            performedByModel: 'EmployerUser',
+            comment: value.question,
+            timestamp: new Date()
+        });
+
+        await ticket.save();
+
+        // Best-effort notification — wrapped so an enum/field mismatch doesn't break the request
+        try {
+            await Notification.createNotification({
+                title: 'New Question on Your Ticket',
+                description: `A question was raised on ticket ${ticket.ticketId}: "${value.question}"`,
+                type: 'TICKET_QUESTION',
+                recipientType: 'EMPLOYEE',
+                recipientId: ticket.raisedBy,
+                recipientModel: 'Employee',
+                senderId: req.user._id,
+                senderModel: 'EmployerUser',
+                relatedEntityType: 'Ticket',
+                relatedEntityId: ticket._id,
+                metadata: { ticketId: ticket.ticketId }
+            });
+        } catch (notifyErr) {
+            console.error('Question notification failed:', notifyErr.message);
+        }
+
+        await ticket.populate('raisedBy', 'firstName lastName employeeId officialEmail department');
+        await ticket.populate('activityLogs.performedBy', 'firstName lastName employeeId email role');
+
+        return res.status(200).json({
+            success: true,
+            message: 'Question added successfully',
+            data: {
+                ticket: ticket.toObject(),
+                summary: ticket.getSummary()
+            }
+        });
+    } catch (error) {
+        console.error('Add question error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+// NEW: Employee answers a question raised on their own ticket
+export const answerQuestionOnTicket = async (req, res) => {
+    try {
+        const { ticketId } = req.params;
+
+        const { error, value } = answerQuestionSchema.validate(req.body);
+        if (error) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation error',
+                errors: error.details.map(detail => detail.message)
+            });
+        }
+
+        const ticket = await Ticket.findOne({ ticketId });
+        if (!ticket) {
+            return res.status(404).json({
+                success: false,
+                message: 'Ticket not found'
+            });
+        }
+
+        if (ticket.raisedBy.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: 'You can only answer questions on your own tickets'
+            });
+        }
+
+        if (ticket.status === 'RESOLVED') {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot answer on a resolved ticket'
+            });
+        }
+
+        ticket.activityLogs.push({
+            action: 'Answer submitted',
+            type: 'ANSWER',
+            performedBy: req.user._id,
+            performedByModel: 'Employee',
+            comment: value.answer,
+            timestamp: new Date()
+        });
+
+        await ticket.save();
+
+        try {
+            const notifyTarget = ticket.forwardedTo || ticket.assignedTo;
+            if (notifyTarget) {
+                await Notification.createNotification({
+                    title: 'Employee Answered Your Question',
+                    description: `${req.user.firstName} ${req.user.lastName} replied on ticket ${ticket.ticketId}`,
+                    type: 'TICKET_ANSWER',
+                    recipientType: 'EMPLOYER_HR',
+                    recipientId: notifyTarget,
+                    recipientModel: 'EmployerUser',
+                    senderId: req.user._id,
+                    senderModel: 'Employee',
+                    relatedEntityType: 'Ticket',
+                    relatedEntityId: ticket._id,
+                    metadata: { ticketId: ticket.ticketId }
+                });
+            }
+        } catch (notifyErr) {
+            console.error('Answer notification failed:', notifyErr.message);
+        }
+
+        await ticket.populate('raisedBy', 'firstName lastName employeeId officialEmail department');
+        await ticket.populate('activityLogs.performedBy', 'firstName lastName employeeId email role');
+
+        return res.status(200).json({
+            success: true,
+            message: 'Answer submitted successfully',
+            data: {
+                ticket: ticket.toObject(),
+                summary: ticket.getSummary()
+            }
+        });
+    } catch (error) {
+        console.error('Answer question error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+// NEW: presigned URL for viewing/downloading a ticket attachment
+export const getTicketAttachmentUrl = async (req, res) => {
+    try {
+        const { key } = req.query;
+
+        if (!key) {
+            return res.status(400).json({ success: false, message: 'Key is required' });
+        }
+
+        const url = await getTicketAttachmentPresignedUrl(decodeURIComponent(key));
+
+        return res.status(200).json({ success: true, url });
+    } catch (error) {
+        console.error('Get attachment URL error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Error generating attachment URL',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
 // Get ticket statistics
 export const getTicketStatistics = async (req, res) => {
     try {
         let filter = {};
 
-        // If employee, only show their tickets
         if (req.user.role === 'EMPLOYEE') {
             filter.raisedBy = req.user._id;
         }
-        // If IT Support, only show assigned IT tickets
         else if (req.user.role === 'EMPLOYER_IT') {
             filter = {
                 $and: [
@@ -743,7 +901,6 @@ export const getTicketStatistics = async (req, res) => {
             ])
         ]);
 
-        // Format statistics
         const stats = {
             total,
             status: {
@@ -760,7 +917,6 @@ export const getTicketStatistics = async (req, res) => {
                 return acc;
             }, {}),
             responseTime: {
-                // Average resolution time in days
                 averageDays: await Ticket.aggregate([
                     { $match: { ...filter, resolvedAt: { $ne: null } } },
                     {
@@ -768,7 +924,7 @@ export const getTicketStatistics = async (req, res) => {
                             resolutionTime: {
                                 $divide: [
                                     { $subtract: ['$resolvedAt', '$createdAt'] },
-                                    1000 * 60 * 60 * 24 // Convert to days
+                                    1000 * 60 * 60 * 24
                                 ]
                             }
                         }

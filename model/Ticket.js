@@ -7,6 +7,12 @@ const activityLogSchema = new Schema({
         required: true,
         trim: true
     },
+    // NEW: distinguishes system events from HR questions / employee answers
+    type: {
+        type: String,
+        enum: ['SYSTEM', 'QUESTION', 'ANSWER', 'COMMENT'],
+        default: 'SYSTEM'
+    },
     performedBy: {
         type: mongoose.Schema.Types.ObjectId,
         required: true,
@@ -25,6 +31,16 @@ const activityLogSchema = new Schema({
         type: Date,
         default: Date.now
     }
+}); // _id enabled (removed _id:false) so each log has a stable id for the UI
+
+// NEW: attachment sub-schema for ticket screenshots/files
+const attachmentSchema = new Schema({
+    url: { type: String, required: true },
+    key: { type: String, required: true },
+    fileName: { type: String, required: true },
+    fileType: { type: String },
+    fileSize: { type: Number },
+    uploadedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
 // Main Ticket Schema - NO pre-save hooks, NO required on ticketId
@@ -33,7 +49,6 @@ const ticketSchema = new Schema({
         type: String,
         unique: true,
         index: true
-        // NOT required, NO default
     },
     category: {
         type: String,
@@ -96,6 +111,11 @@ const ticketSchema = new Schema({
         type: Date,
         default: null
     },
+    // NEW
+    attachments: {
+        type: [attachmentSchema],
+        default: []
+    },
     activityLogs: [activityLogSchema]
 }, {
     timestamps: true
@@ -157,16 +177,16 @@ ticketSchema.statics.generateTicketId = async function () {
         return `TKT-${newNumber.toString().padStart(3, '0')}`;
     } catch (error) {
         console.error('Error generating ticket ID:', error);
-        // Fallback using timestamp
         const timestamp = Date.now();
         return `TKT-${timestamp.toString().slice(-6)}`;
     }
 };
 
 // Method to add activity log
-ticketSchema.methods.addActivityLog = async function (action, performedBy, performedByModel, comment = null) {
+ticketSchema.methods.addActivityLog = async function (action, performedBy, performedByModel, comment = null, type = 'SYSTEM') {
     this.activityLogs.push({
         action,
+        type,
         performedBy,
         performedByModel,
         comment,
@@ -186,7 +206,8 @@ ticketSchema.methods.getSummary = function () {
         raisedBy: this.raisedBy,
         createdAt: this.createdAt,
         resolvedAt: this.resolvedAt,
-        activityCount: this.activityLogs.length
+        activityCount: this.activityLogs.length,
+        attachmentCount: this.attachments.length
     };
 };
 
