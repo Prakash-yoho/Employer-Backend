@@ -51,6 +51,10 @@ const employerUserSchema = new mongoose.Schema(
         lastLogoutAt: {
             type: Date,
             default: null
+        },
+        lastLoginIp: {
+            type: String,
+            default: null
         }
     }, { timestamps: true })
 

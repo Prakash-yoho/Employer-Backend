@@ -44,6 +44,15 @@ connectDB()
 const PORT = process.env.PORT || 5000
 const app = express()
 
+// Render (and most PaaS hosts) terminate HTTPS at their edge proxy and
+// forward requests to this app over plain HTTP, setting X-Forwarded-Proto.
+// Without trusting the proxy, req.protocol always reports "http" here,
+// which breaks anything that builds an absolute URL off req.protocol
+// (e.g. the default-docs PDF links) — the browser then blocks those as
+// mixed content on an https page.
+app.set('trust proxy', 1)
+
+
 app.use(cors({
     origin: [
         process.env.FRONTEND_CANDIDATE_URL,

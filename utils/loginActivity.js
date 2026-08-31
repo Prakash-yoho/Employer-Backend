@@ -19,6 +19,8 @@ const modelForRole = (role) =>
  */
 export const recordLogin = async (req, { userId, userModel, role, name, email, employeeId, token }) => {
     try {
+        const ipAddress = getClientIp(req);
+
         await LoginHistory.create({
             userId,
             userModel,
@@ -27,7 +29,7 @@ export const recordLogin = async (req, { userId, userModel, role, name, email, e
             email: email || null,
             employeeId: employeeId || null,
             token,
-            ipAddress: getClientIp(req),
+            ipAddress,
             userAgent: req.headers["user-agent"] || null,
             loginAt: new Date(),
             status: "active",
@@ -36,7 +38,7 @@ export const recordLogin = async (req, { userId, userModel, role, name, email, e
         const Model = modelForRole(role);
         await Model.updateOne(
             { _id: userId },
-            { loginStatus: "Online", lastLoginAt: new Date() }
+            { loginStatus: "Online", lastLoginAt: new Date(), lastLoginIp: ipAddress }
         );
     } catch (error) {
         // Login-activity tracking should never break the login/logout flow itself
