@@ -8,6 +8,7 @@ import BlacklistedToken from '../model/BlacklistedToken.js';
 import Joi from 'joi';
 import { sendMail } from '../utils/mailer.js';
 import { newAdminUserTemplate } from '../utils/emailTemplates.js';
+import { recordLogin, recordLogout } from '../utils/loginActivity.js';
 
 dotenv.config();
 
@@ -82,6 +83,15 @@ export const employerAdminLogin = async (req, res) => {
         // Generate JWT token
         const token = generateAuthToken(adminUser);
 
+        await recordLogin(req, {
+            userId: adminUser._id,
+            userModel: 'EmployerUser',
+            role: adminUser.role,
+            name: `${adminUser.firstName} ${adminUser.lastName}`.trim(),
+            email: adminUser.email,
+            token,
+        });
+
         return res.status(200).json({
             success: true,
             message: 'Admin logged in successfully',
@@ -139,6 +149,15 @@ export const projectManagerLogin = async (req, res) => {
 
         const token = generateAuthToken(user);
 
+        await recordLogin(req, {
+            userId: user._id,
+            userModel: 'EmployerUser',
+            role: user.role,
+            name: `${user.firstName} ${user.lastName}`.trim(),
+            email: user.email,
+            token,
+        });
+
         return res.status(200).json({
             success: true,
             message: "Project Manager logged in successfully",
@@ -183,6 +202,15 @@ export const employerUserLogin = async (req, res) => {
         // Generate JWT token
         const token = generateAuthToken(employerUser);
 
+        await recordLogin(req, {
+            userId: employerUser._id,
+            userModel: 'EmployerUser',
+            role: employerUser.role,
+            name: `${employerUser.firstName} ${employerUser.lastName}`.trim(),
+            email: employerUser.email,
+            token,
+        });
+
         return res.status(200).json({
             success: true,
             message: 'Employer user logged in successfully',
@@ -224,6 +252,9 @@ export const employerUserLogout = async (req, res) => {
             token,
             expiresAt: new Date(decoded.exp * 1000)
         });
+
+        // Close out this login session (for admin login-activity monitoring)
+        await recordLogout(token, decoded);
 
         return res.status(200).json({
             success: true,

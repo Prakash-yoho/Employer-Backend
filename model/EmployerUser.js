@@ -37,6 +37,20 @@ const employerUserSchema = new mongoose.Schema(
         isActive: {
             type: Boolean,
             default: true
+        },
+        // Cached login-activity fields (source of truth is the LoginHistory collection)
+        loginStatus: {
+            type: String,
+            enum: ["Online", "Offline"],
+            default: "Offline"
+        },
+        lastLoginAt: {
+            type: Date,
+            default: null
+        },
+        lastLogoutAt: {
+            type: Date,
+            default: null
         }
     }, { timestamps: true })
 

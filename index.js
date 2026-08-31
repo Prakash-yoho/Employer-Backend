@@ -4,6 +4,7 @@ import express from 'express'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
 import employerRoutes from './routes/employerUserRoutes.js'
+import loginActivityRoutes from './routes/loginActivityRoutes.js'
 import employeeRoutes from './routes/employeeRoutes.js'
 import documentRoutes from './routes/documentRoutes.js'
 import identitycardRoutes from './routes/identityCardRoutes.js'
@@ -73,6 +74,7 @@ app.use("/api", defaultDocsRoutes);
 app.get("/api/attendance/time-status", (req, res) => res.json(getTimeStatus()));
 
 // Employer Routes
+app.use("/api/employer/login-activity", loginActivityRoutes);
 app.use("/api/employer", employerRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/documents', documentRoutes);

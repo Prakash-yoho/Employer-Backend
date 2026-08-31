@@ -14,6 +14,7 @@ import { newEmployeeTemplate, passwordChangedByAdminTemplate } from '../utils/em
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 import { uploadFaceImage } from "../utils/faceUpload.js";
+import { recordLogin, recordLogout } from "../utils/loginActivity.js";
 
 
 
@@ -343,6 +344,17 @@ export const employeeLogin = async (req, res) => {
 
         // await employee.save();
 
+        // Track this login session (for admin login-activity monitoring)
+        await recordLogin(req, {
+            userId: employee._id,
+            userModel: 'Employee',
+            role: employee.role,
+            name: `${employee.firstName} ${employee.lastName}`.trim(),
+            email: employee.officialEmail,
+            employeeId: employee.employeeId,
+            token,
+        });
+
         // Return employee without password
         const employeeResponse = employee.toJSON();
 
@@ -632,6 +644,9 @@ export const employeeLogout = async (req, res) => {
             token,
             expiresAt: new Date(decoded.exp * 1000)
         });
+
+        // Close out this login session (for admin login-activity monitoring)
+        await recordLogout(token, decoded);
 
         return res.status(200).json({
             success: true,

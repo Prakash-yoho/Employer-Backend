@@ -488,6 +488,21 @@ const employeeSchema = new Schema({
         default: 'pending'
     },
 
+    // Cached login-activity fields (source of truth is the LoginHistory collection)
+    loginStatus: {
+        type: String,
+        enum: ['Online', 'Offline'],
+        default: 'Offline'
+    },
+    lastLoginAt: {
+        type: Date,
+        default: null
+    },
+    lastLogoutAt: {
+        type: Date,
+        default: null
+    },
+
     createdBy: {
         userId: {
             type: mongoose.Schema.Types.ObjectId,
