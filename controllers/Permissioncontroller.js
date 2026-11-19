@@ -55,7 +55,9 @@ export const createPermissionRequest = async (req, res) => {
         const totalMins = (tH * 60 + tM) - (fH * 60 + fM);
 
         if (totalMins <= 0) return res.status(400).json({ success: false, message: 'toTime must be after fromTime' });
-        if (totalMins > 60) return res.status(400).json({ success: false, message: 'Max 1 hour per permission request' });
+        // 30-minute steps (30 min, 1 hr, 1 hr 30 min, 2 hrs …); the cap is the remaining monthly quota below
+        if (totalMins % 30 !== 0)
+            return res.status(400).json({ success: false, message: 'Permission must be booked in 30-minute steps' });
 
         const durationHours = +(totalMins / 60).toFixed(4);
         const durationText = [

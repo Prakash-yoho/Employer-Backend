@@ -239,13 +239,17 @@ export const createPermissionValidation = Joi.object({
 
     if (totalMinutes <= 0)
         return helpers.error('object.timeOrder');
-    if (totalMinutes > 120)
+    if (totalMinutes > 480)
         return helpers.error('object.timeExceedsLimit');
+    // Permissions are booked in 30-minute steps: 30 min, 1 hr, 1 hr 30 min, 2 hrs …
+    if (totalMinutes % 30 !== 0)
+        return helpers.error('object.timeStep');
 
     return value;
 }, 'Permission time validation').messages({
     'object.timeOrder':        'toTime must be after fromTime',
-    'object.timeExceedsLimit': 'Permission cannot exceed 2 hours'
+    'object.timeExceedsLimit': 'Permission cannot exceed 8 hours',
+    'object.timeStep':         'Permission must be in 30-minute steps (30 min, 1 hr, 1 hr 30 min, 2 hrs …)'
 });
 
 // ─── Update Permission Status (HR/Admin) ─────────────────────────────────────

@@ -25,6 +25,9 @@ const leaveSchema = new Schema({
         required: true,
         validate: {
             validator: function (value) {
+                // Only enforced when the request is created. HR/Admin must still be
+                // able to approve / reject (re-save) a leave whose start date has passed.
+                if (!this.isNew) return true;
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 const start = new Date(value);

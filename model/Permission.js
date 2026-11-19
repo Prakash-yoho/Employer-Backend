@@ -31,8 +31,10 @@ const permissionSchema = new Schema({
     durationHours: {
         type: Number,
         required: true,
-        max: 2
+        min: 0.5,
+        max: 12
     },
+    durationText: { type: String, default: '' },
     reason: {
         type: String,
         required: true,
