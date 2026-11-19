@@ -7,6 +7,10 @@ export const getDefaultDocuments = (req, res) => {
         url: `${baseUrl}/public/docs/KIAQ_HR_Policy.pdf`,
       },
       {
+        name: "Confidential Client Identity Protection & Unauthorized Information Access Prevention Policy",
+        url: `${baseUrl}/public/docs/CompanyClient_Policy_KIAQ.pdf`,
+      },
+      {
         name: "Attendance and Dresscode Policy",
         url: `${baseUrl}/public/docs/Attendance_DressCode_Policy_Kiaq.pdf`,
       },

@@ -532,6 +532,10 @@ const employeeSchema = new Schema({
         type: Date,
         default: null
     },
+    lastLoginIp: {
+        type: String,
+        default: null
+    },
 
     createdBy: {
         userId: {

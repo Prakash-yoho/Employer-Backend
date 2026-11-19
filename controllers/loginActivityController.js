@@ -36,7 +36,7 @@ export const getLoginActivityUsers = async (req, res) => {
                 ];
             }
             const emps = await Employee.find(empFilter)
-                .select('employeeId firstName lastName officialEmail role isActive loginStatus lastLoginAt lastLogoutAt')
+                .select('employeeId firstName lastName officialEmail role isActive loginStatus lastLoginAt lastLogoutAt lastLoginIp')
                 .lean();
 
             employees = emps.map((e) => ({
@@ -50,6 +50,7 @@ export const getLoginActivityUsers = async (req, res) => {
                 status: e.loginStatus || 'Offline',
                 lastLoginAt: e.lastLoginAt || null,
                 lastLogoutAt: e.lastLogoutAt || null,
+                lastLoginIp: e.lastLoginIp || null,
             }));
         }
 
@@ -66,7 +67,7 @@ export const getLoginActivityUsers = async (req, res) => {
                 ];
             }
             const eus = await EmployerUser.find(euFilter)
-                .select('firstName lastName email role isActive loginStatus lastLoginAt lastLogoutAt')
+                .select('firstName lastName email role isActive loginStatus lastLoginAt lastLogoutAt lastLoginIp')
                 .lean();
 
             employerUsers = eus.map((u) => ({
@@ -80,6 +81,7 @@ export const getLoginActivityUsers = async (req, res) => {
                 status: u.loginStatus || 'Offline',
                 lastLoginAt: u.lastLoginAt || null,
                 lastLogoutAt: u.lastLogoutAt || null,
+                lastLoginIp: u.lastLoginIp || null,
             }));
         }
 
