@@ -513,13 +513,25 @@ export const getAllLeaveRequests = async (req, res) => {
     try {
         const v = validate(getLeavesQueryValidation, req.query);
         if (!v.ok) return res.status(400).json({ success: false, message: 'Validation failed', errors: v.errors });
-        const { status, leaveType, leaveDuration, department, startDate, endDate, page, limit, sortBy, sortOrder } = v.data;
+        const { status, leaveType, leaveDuration, department, startDate, endDate, page, limit, sortBy, sortOrder, search } = v.data;
         const q = {};
         if (status !== 'ALL') q.status = status;
         if (leaveType !== 'ALL') q.leaveType = leaveType;
         if (leaveDuration !== 'ALL') q.leaveDuration = leaveDuration;
         if (department) q.department = new RegExp(department, 'i');
-        if (startDate && endDate) q.$or = [{ startDate: { $lte: toUTC(endDate) }, endDate: { $gte: toUTC(startDate) } }];
+        const and = [];
+        if (startDate && endDate) and.push({ $or: [{ startDate: { $lte: toUTC(endDate) }, endDate: { $gte: toUTC(startDate) } }] });
+        if (search && search.trim()) {
+            const rx = new RegExp(search.trim().split(/\s+/).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'), 'i');
+            const emps = await Employee.find({
+                $or: [
+                    { firstName: rx }, { lastName: rx }, { employeeId: rx }, { officialEmail: rx },
+                    { $expr: { $regexMatch: { input: { $concat: [{ $ifNull: ['$firstName', ''] }, ' ', { $ifNull: ['$lastName', ''] }] }, regex: rx.source, options: 'i' } } },
+                ],
+            }).select('_id').lean();
+            and.push({ $or: [{ requestId: rx }, { employee: { $in: emps.map(x => x._id) } }] });
+        }
+        if (and.length) q.$and = and;
 
         const [leaves, total] = await Promise.all([
             Leave.find(q).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip((page - 1) * limit).limit(limit)

@@ -797,11 +797,24 @@ export const getAllEmployeesAttendance = async (req, res) => {
 
     // Build employee search filter
     const employeeMatch = {};
-    if (search) {
+    if (search && String(search).trim()) {
+      // Search runs on the whole employee collection (not just the current page).
+      const rx = String(search).trim().split(/\s+/)
+        .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
       employeeMatch.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { employeeId: { $regex: search, $options: "i" } },
+        { firstName: { $regex: rx, $options: "i" } },
+        { lastName: { $regex: rx, $options: "i" } },
+        { officialEmail: { $regex: rx, $options: "i" } },
+        { employeeId: { $regex: rx, $options: "i" } },
+        {
+          $expr: {
+            $regexMatch: {
+              input: { $concat: [{ $ifNull: ["$firstName", ""] }, " ", { $ifNull: ["$lastName", ""] }] },
+              regex: rx,
+              options: "i",
+            },
+          },
+        },
       ];
     }
 

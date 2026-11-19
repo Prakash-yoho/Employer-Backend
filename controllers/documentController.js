@@ -10,6 +10,7 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { pipeline } from "stream";
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { promisify } from 'util';
+import archiver from 'archiver';
 
 
 
@@ -1543,5 +1544,143 @@ export const downloadAppointmentLetterByAdmin = async (req, res) => {
     } catch (error) {
         console.error("Download appointment letter by admin error:", error);
         return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HR / Admin: download EVERY uploaded document of one employee as a single zip.
+// Zip + inner folder are named "<Employee Name>_<EmployeeId>".
+// ─────────────────────────────────────────────────────────────────────────────
+const safeName = (s) => String(s || '').replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+const DOC_LABELS = {
+    passportPhoto: 'Passport Photo', aadharCard: 'Aadhar Card', panCard: 'PAN Card',
+    drivingLicense: 'Driving License', passport: 'Passport', interviewresume: 'Resume',
+    addressProof: 'Address Proof', birthCertificate: 'Birth Certificate',
+    tenthCertificate: '10th Certificate', eleventhCertificate: '11th Certificate',
+    twelfthCertificate: '12th Certificate', diplomaCertificate: 'Diploma Certificate',
+    ugCertificate: 'UG Certificate', pgCertificate: 'PG Certificate',
+    consolidatedCertificate: 'UG Consolidated Certificate',
+    pgconsolidatedCertificate: 'PG Consolidated Certificate',
+    diplomaconsolidatedCertificate: 'Diploma Consolidated Certificate',
+    signedOfferLetter: 'Signed Offer Letter', bankPassbook: 'Bank Passbook',
+};
+
+// Every uploaded file of one Document record -> [{ folder, label, d }]
+const collectUploadedItems = (doc) => {
+    const items = [];
+    for (const [key, label] of Object.entries(DOC_LABELS)) {
+        if (doc[key]) items.push({ folder: '', label, d: doc[key] });
+    }
+    (doc.trainingCertificates || []).forEach((d, i) => items.push({ folder: 'Training Certificates', label: `Training Certificate ${i + 1}`, d }));
+    (doc.experienceDocuments || []).forEach((exp, ci) => {
+        const folder = `Experience/${safeName(exp.companyName) || `Company ${ci + 1}`}`;
+        [['experienceCertificate', 'Experience Certificate'], ['relievingCertificate', 'Relieving Certificate'],
+         ['sixmonthstatement', 'Six Month Statement'], ['appointmentLetter', 'Appointment Letter']]
+            .forEach(([k, l]) => { if (exp[k]) items.push({ folder, label: l, d: exp[k] }); });
+        (exp.payslips || []).forEach((d, pi) => items.push({ folder: `${folder}/Payslips`, label: `Payslip ${pi + 1}`, d }));
+    });
+    return items.filter(i => s3KeyFromDoc(i.d));
+};
+
+// Appends one employee's files under "<base>/" in the archive; returns skipped labels.
+const appendEmployeeFiles = async (archive, doc, base) => {
+    const used = new Set();
+    const skipped = [];
+    for (const it of collectUploadedItems(doc)) {
+        try {
+            const file = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: s3KeyFromDoc(it.d) }));
+            const origExt = (it.d.fileName || '').match(/\.[A-Za-z0-9]{1,5}$/)?.[0]
+                || ({ 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png' }[it.d.mimeType] || '');
+            let path = `${base}/${it.folder ? it.folder + '/' : ''}${safeName(it.label)}${origExt}`;
+            let n = 1;
+            while (used.has(path)) path = path.replace(/( \(\d+\))?(\.[^./]*)?$/, ` (${++n})$2`);
+            used.add(path);
+            archive.append(file.Body, { name: path });
+            await new Promise((resolve) => { file.Body.once('end', resolve); file.Body.once('error', resolve); file.Body.once('close', resolve); });
+        } catch (err) {
+            console.error(`Skipping ${it.label} (${base}):`, err.message);
+            skipped.push(it.label);
+        }
+    }
+    if (skipped.length) archive.append(`These files could not be added:\n${skipped.join('\n')}\n`, { name: `${base}/_not_included.txt` });
+    return skipped;
+};
+
+const empBaseName = (doc, fallbackId) => {
+    const emp = doc.employee || {};
+    const empName = safeName(`${emp.firstName || ''} ${emp.lastName || ''}`) || 'Employee';
+    const desig = safeName(emp.designation);
+    return `${empName}_${safeName(doc.employeeId || emp.employeeId || fallbackId)}${desig ? `_${desig}` : ''}`;
+};
+
+const startZip = (res, zipName) => {
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName.replace(/[^\x20-\x7E]/g, '_')}.zip"; filename*=UTF-8''${encodeURIComponent(zipName)}.zip`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => { console.error('Zip error:', err); res.destroy(err); });
+    archive.pipe(res);
+    return archive;
+};
+
+const s3KeyFromDoc = (d) => {
+    if (d?.fileKey) return d.fileKey;
+    if (!d?.fileUrl) return null;
+    const parts = d.fileUrl.split('.amazonaws.com/');
+    if (parts.length < 2) return null;
+    let key = parts[1].split('?')[0];
+    if (key.includes(S3_BUCKET + '/')) key = key.replace(`${S3_BUCKET}/`, '');
+    return decodeURIComponent(key);
+};
+
+export const downloadAllEmployeeDocuments = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can download employee documents' });
+        }
+        const { employeeId } = req.params;
+        const doc = await Document.findOne({ employeeId }).populate('employee', 'firstName lastName employeeId designation');
+        if (!doc) return res.status(404).json({ success: false, message: 'No documents found for this employee' });
+        if (!collectUploadedItems(doc).length) {
+            return res.status(404).json({ success: false, message: 'This employee has no uploaded documents' });
+        }
+        const base = empBaseName(doc, employeeId);
+        const archive = startZip(res, base);
+        await appendEmployeeFiles(archive, doc, base);
+        await archive.finalize();
+    } catch (error) {
+        console.error('Download all documents error:', error);
+        if (!res.headersSent) return res.status(500).json({ success: false, message: 'Error creating documents zip' });
+        res.end();
+    }
+};
+
+// HR / Admin: ONE zip with a "<Name>_<EmpID>" folder per employee (everyone who has uploads).
+export const downloadEveryEmployeeDocuments = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can download employee documents' });
+        }
+        const docs = await Document.find({}).populate('employee', 'firstName lastName employeeId designation');
+        const withFiles = docs.filter(d => collectUploadedItems(d).length);
+        if (!withFiles.length) {
+            return res.status(404).json({ success: false, message: 'No uploaded documents found' });
+        }
+        const stamp = new Date().toISOString().slice(0, 10);
+        const archive = startZip(res, `All_Employee_Documents_${stamp}`);
+        const usedBases = new Set();
+        for (const doc of withFiles) {
+            let base = empBaseName(doc, doc.employeeId);
+            let n = 1;
+            while (usedBases.has(base)) base = `${empBaseName(doc, doc.employeeId)} (${++n})`;
+            usedBases.add(base);
+            await appendEmployeeFiles(archive, doc, base);
+        }
+        await archive.finalize();
+    } catch (error) {
+        console.error('Download every employee documents error:', error);
+        if (!res.headersSent) return res.status(500).json({ success: false, message: 'Error creating documents zip' });
+        res.end();
     }
 };

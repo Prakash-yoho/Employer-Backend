@@ -1,6 +1,6 @@
 import express from 'express';
 import upload, { handleDocumentUploadError } from '../config/documentMulter.js'
-import { addExperienceCompany, deleteDocument, deleteExperience, downloadAppointmentLetter, downloadAppointmentLetterByAdmin, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewAppointmentLetter, previewAppointmentLetterByAdmin, previewDocument, uploadDocument, verifyDocument } from '../controllers/documentController.js';
+import { addExperienceCompany, deleteDocument, deleteExperience, downloadAppointmentLetter, downloadAllEmployeeDocuments, downloadEveryEmployeeDocuments, downloadAppointmentLetterByAdmin, downloadDocument, getAllDocuments, getDocumentsByEmployeeId, getMyDocuments, initEmployeeDocument, previewAppointmentLetter, previewAppointmentLetterByAdmin, previewDocument, uploadDocument, verifyDocument } from '../controllers/documentController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -58,6 +58,13 @@ router.get(
 );
 
 router.get(
+    '/download-all',
+    authenticate,
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    downloadEveryEmployeeDocuments
+);
+
+router.get(
     '/employee/:employeeId',
     authenticate,
     authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
@@ -76,6 +83,13 @@ router.get(
     authenticate,
     authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
     previewDocument
+);
+
+router.get(
+    '/employee/:employeeId/download-all',
+    authenticate,
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    downloadAllEmployeeDocuments
 );
 
 router.get(

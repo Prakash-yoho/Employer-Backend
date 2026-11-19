@@ -148,6 +148,9 @@ export const getLeavesQueryValidation = Joi.object({
             'string.max': 'Department name cannot exceed 100 characters'
         }),
 
+    // Free-text search across ALL pages (employee name / request id)
+    search: Joi.string().trim().max(100).allow('').optional(),
+
     page: Joi.number()
         .integer()
         .min(1)
