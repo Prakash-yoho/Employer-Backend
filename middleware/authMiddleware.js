@@ -5,7 +5,6 @@ import Employee from '../model/Employee.js';
 
 export const authenticate = async (req, res, next) => {
     try {
-        // Get token from header
         const token = req.header('Authorization')?.replace('Bearer ', '');
 
         if (!token) {
@@ -20,10 +19,8 @@ export const authenticate = async (req, res, next) => {
             return res.status(401).json({ message: "Token invalidated" });
         }
 
-        // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        // Find user by ID from token
         const user = await EmployerUser.findById(decoded._id).select('-password');
 
         if (!user) {
@@ -40,7 +37,6 @@ export const authenticate = async (req, res, next) => {
             });
         }
 
-        // Attach user to request
         req.user = user;
         next();
 
@@ -67,7 +63,6 @@ export const authenticate = async (req, res, next) => {
 }
 
 export const authorize = (roles = []) => {
-    // If roles is a string, convert to array
     if (typeof roles === 'string') {
         roles = [roles];
     }
@@ -93,10 +88,8 @@ export const authorize = (roles = []) => {
 
 export const authenticateEmployee = async (req, res, next) => {
     try {
-        // Get token from header
         const token = req.header('Authorization')?.replace('Bearer ', '');
 
-        // Verify token
         let decoded;
         try {
             decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -113,7 +106,6 @@ export const authenticateEmployee = async (req, res, next) => {
             });
         }
 
-        // Check if user is an employee
         if (!['Employee', 'TL'].includes(decoded.role)) {
             return res.status(403).json({
                 success: false,
@@ -121,7 +113,6 @@ export const authenticateEmployee = async (req, res, next) => {
             });
         }
 
-        // Find employee
         const employee = await Employee.findById(decoded._id).select('-officialPassword');
 
         if (!employee) {
@@ -131,14 +122,12 @@ export const authenticateEmployee = async (req, res, next) => {
             });
         }
 
-        // Check if employee is active
         if (!employee.isActive) {
             return res.status(400).json({
                 success: false,
                 message: 'Your account has been deactivated. Please contact HR/Admin.'
             });
         }
-        // Attach employee to request
         req.user = employee;
         next();
     } catch (error) {
@@ -156,6 +145,66 @@ export const authenticateEmployee = async (req, res, next) => {
             });
         }
 
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error"
+        });
+    }
+};
+
+// NEW: authenticates either an Employee or an EmployerUser from the same token,
+// based on the role encoded in the JWT. Used for endpoints both sides can hit
+// (e.g. fetching a presigned attachment URL).
+export const authenticateAny = async (req, res, next) => {
+    try {
+        const token = req.header('Authorization')?.replace('Bearer ', '');
+
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                message: 'No authentication token, access denied'
+            });
+        }
+
+        const blacklisted = await BlacklistedToken.findOne({ token });
+        if (blacklisted) {
+            return res.status(401).json({ message: "Token invalidated" });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
+        } catch (error) {
+            if (error.name === 'TokenExpiredError') {
+                return res.status(401).json({ success: false, message: 'Token expired' });
+            }
+            return res.status(401).json({ success: false, message: 'Token is invalid' });
+        }
+
+        if (['Employee', 'TL'].includes(decoded.role)) {
+            const employee = await Employee.findById(decoded._id).select('-officialPassword');
+            if (!employee) {
+                return res.status(404).json({ success: false, message: 'Employee not found' });
+            }
+            if (!employee.isActive) {
+                return res.status(400).json({ success: false, message: 'Your account has been deactivated.' });
+            }
+            req.user = employee;
+            req.userType = 'Employee';
+        } else {
+            const user = await EmployerUser.findById(decoded._id).select('-password');
+            if (!user) {
+                return res.status(401).json({ success: false, message: 'User not found' });
+            }
+            if (!user.isActive) {
+                return res.status(401).json({ success: false, message: 'User account is deactivated' });
+            }
+            req.user = user;
+            req.userType = 'EmployerUser';
+        }
+
+        next();
+    } catch (error) {
         return res.status(500).json({
             success: false,
             message: "Internal server error"

@@ -34,6 +34,7 @@ export const createUpdateDocumentSchema = Joi.object({
     bankPassbook: documentFieldValidation,
     signedOfferLetter: documentFieldValidation,
     interviewresume: documentFieldValidation,
+    passportPhoto: documentFieldValidation,
     
 
     // Optional fields

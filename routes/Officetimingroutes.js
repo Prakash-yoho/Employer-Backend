@@ -3,7 +3,7 @@ import {
   getOfficeTiming,
   updateOfficeTiming,
   getViolationsReport,
-} from "../controllers/officeTimingController.js";
+} from "../controllers/Officetimingcontroller.js";
 import { authenticate, authorize } from "../middleware/authMiddleware.js";
 
 const router = express.Router();

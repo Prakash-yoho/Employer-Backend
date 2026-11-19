@@ -144,6 +144,14 @@ const bankDetailsSchema = new Schema({
     accountNumber: {
         type: String,
     },
+    branchName: {
+        type: String,
+        trim: true,
+    },
+    nameInBankAccount: {
+        type: String,
+        trim: true,
+    },
     ifscCode: {
         type: String,
         match: [/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC code"]
@@ -153,6 +161,19 @@ const bankDetailsSchema = new Schema({
         default: true
     },
     uanNumber: String
+}, { _id: false });
+
+// Schema for Salary Account Details — the account where salary is credited.
+// Same shape as the personal bank details but editable by HR/Admin ONLY.
+const salaryAccountSchema = new Schema({
+    bankName: { type: String, trim: true },
+    accountNumber: { type: String, trim: true },
+    branchName: { type: String, trim: true },
+    nameInBankAccount: { type: String, trim: true },
+    ifscCode: {
+        type: String,
+        match: [/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC code"]
+    }
 }, { _id: false });
 
 // Schema for Emergency Contact
@@ -169,6 +190,35 @@ const emergencyContactSchema = new Schema({
     },
     address: String
 }, { _id: false });
+
+
+
+
+// In model/Employee.js — add this schema near the top, with the other sub-schemas
+
+// In model/Employee.js — update appraisalSchema
+
+const appraisalSchema = new Schema({
+    previousAnnualSalary: { type: Number, required: true },
+    newAnnualSalary: { type: Number, required: true },
+    percentageIncrement: { type: Number, required: true },
+    effectiveDate: { type: Date, required: true },
+    letterDate: { type: Date, default: Date.now },
+    refNo: String,
+    designation: String,
+    department: String,
+    url: { type: String },
+    fileName: { type: String },
+    sentAt: { type: Date, default: Date.now },
+
+    // ✅ false until cron applies it on effectiveDate
+    isEffective: { type: Boolean, default: false },
+
+    generatedBy: {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser' },
+        userEmail: String,
+    },
+}, { timestamps: true });
 
 // Main Employee Schema
 const employeeSchema = new Schema({
@@ -187,6 +237,12 @@ const employeeSchema = new Schema({
         type: String,
         required: true,
         trim: true
+    },
+    // Name exactly as printed on the Aadhaar card. When empty, the app falls
+    // back to "firstName lastName" everywhere a name is displayed.
+    nameAsPerAadhaar: {
+        type: String,
+        trim: true,
     },
 
     faceImage: {
@@ -247,9 +303,9 @@ const employeeSchema = new Schema({
         match: [/^\S+@\S+\.\S+$/, "Invalid email format"]
     },
     doj: {
-    type: Date,
-    required: true
-},
+        type: Date,
+        // required: true
+    },
     officialPassword: {
         type: String,
         required: true
@@ -354,6 +410,9 @@ const employeeSchema = new Schema({
     // SECTION 6: BANK DETAILS
     bankDetails: bankDetailsSchema,
 
+    // Salary account (HR/Admin only) — payroll uses this when filled, else personal bank details
+    salaryAccountDetails: salaryAccountSchema,
+
     department: {
         type: String,
         required: true
@@ -370,7 +429,7 @@ const employeeSchema = new Schema({
     },
     annualSalary: {
         type: Number,
-        required:true,
+        // required:true,
         default: null
     },
 
@@ -389,6 +448,27 @@ const employeeSchema = new Schema({
         fileName: { type: String },
         isVerified: { type: Boolean, default: false }, // ✅ important
         uploadedAt: { type: Date, default: Date.now }
+    },
+
+    idCard: {
+        status: {
+            type: String,
+            enum: ['not_generated', 'active', 'expired'],
+            default: 'not_generated'
+        },
+        idCardNumber: { type: String, default: null },
+        verificationToken: { type: String, default: null, index: true },
+        issuedAt: { type: Date, default: null },
+        expiredAt: { type: Date, default: null },
+        issuedBy: {
+            userId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser' },
+            userEmail: String
+        }
+    },
+
+    appraisals: {
+        type: [appraisalSchema],
+        default: []
     },
 
     // Resignation & leaving dates (set by HR when deactivating)
@@ -436,6 +516,21 @@ const employeeSchema = new Schema({
         type: String,
         enum: ['pending', 'in_progress', 'verified'],
         default: 'pending'
+    },
+
+    // Cached login-activity fields (source of truth is the LoginHistory collection)
+    loginStatus: {
+        type: String,
+        enum: ['Online', 'Offline'],
+        default: 'Offline'
+    },
+    lastLoginAt: {
+        type: Date,
+        default: null
+    },
+    lastLogoutAt: {
+        type: Date,
+        default: null
     },
 
     createdBy: {
@@ -540,6 +635,9 @@ const employeeSchema = new Schema({
 }, {
     timestamps: true
 });
+
+
+
 
 // Remove password from JSON output
 employeeSchema.methods.toJSON = function () {

@@ -1,7 +1,14 @@
 import express from 'express';
 import { cancelUpdateRequest, changeEmployeePassword, createEmployee, deleteEmployeeImage, deleteEmployeeImageByAdmin, employeeLogin, employeeLogout, generateExperienceCertificateDirect, generateRelievingLetterDirect, getAllEmployees, getAllEmployeesAppointment, getEmployeeById, getEmployeeFace, getEmployeeProfile, getEmployeesWithUpdateRequests,getResignedEmployees, previewExperienceCertificate, previewRelievingLetter, registerEmployeeFace, requestProfileUpdate, resetEmployeeUpdateStatus, sendAppointmentLetter, sendExperienceCertificate, sendRelievingLetter, updateEmployeeByAdmin, updateEmployeeImageByAdmin, updateEmployeeProfile, updateEmployeeStatus, uploadEmployeeImage, verifyAppointmentLetter } from '../controllers/employeeController.js';
 import { authenticate, authenticateEmployee, authorize } from '../middleware/authMiddleware.js';
-import upload, { handleMulterError } from '../config/imageMulter.js'
+import upload, { handleMulterError } from '../config/imageMulter.js';
+
+import {
+    getEmployeesWithAppraisals,
+    getEmployeesForAppraisalSelection,
+    sendAppraisalLetter,
+    previewAppraisalLetter,
+} from '../controllers/employeeController.js';
 
 const router = express.Router();
 
@@ -30,14 +37,13 @@ router.post('/profile/cancel-update-request', cancelUpdateRequest);
 router.post('/profile/image', upload.single('profileImage'), handleMulterError, uploadEmployeeImage);
 // Delete profile image
 router.delete('/profile/image', deleteEmployeeImage);
-router.post('/change-password', changeEmployeePassword);
 router.post('/logout', employeeLogout);
 
 
 // Admin/HR protected routes (require employer authentication)
 router.use(authenticate);
 
-// Create employee (ADMIN/HR only)
+router.post('/:id/change-password', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), changeEmployeePassword);// Create employee (ADMIN/HR only)
 router.post('/', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), createEmployee);
 
 // Get all employees (ADMIN/HR only)
@@ -48,6 +54,31 @@ router.get('/update-requests', authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']), get
 
 router.get('/all-appointmentletters', getAllEmployeesAppointment);
 
+
+// add near the resigned-employees routes
+router.get(
+    '/appraisals',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    getEmployeesWithAppraisals
+);
+
+router.get(
+    '/eligible-for-appraisal',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    getEmployeesForAppraisalSelection
+);
+
+router.post(
+    '/:id/send-appraisal-letter',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    sendAppraisalLetter
+);
+
+router.get(
+    '/:id/preview-appraisal-letter/:appraisalId',
+    authorize(['EMPLOYER_ADMIN', 'EMPLOYER_HR']),
+    previewAppraisalLetter
+);
 
 // Resigned employees management (HR/Admin)
 router.get(

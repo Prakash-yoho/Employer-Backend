@@ -1,4 +1,4 @@
-
+import { getDisplayName } from './displayName.js';
 export const newAdminUserTemplate = (adminUser, plainPassword, role) => {
   const roleDisplay =
     role === 'EMPLOYER_HR' ? 'HR' :
@@ -303,7 +303,7 @@ export const newEmployeeTemplate = (employee, officialPassword) => {
 
     <div class="content">
       <p>
-        Dear ${employee.firstName} ${employee.lastName},
+        Dear ${getDisplayName(employee)},
       </p>
 
       <p>
@@ -314,7 +314,7 @@ export const newEmployeeTemplate = (employee, officialPassword) => {
       <div class="section">
         <div class="section-title">Employee Details</div>
         <div class="details">
-          <div><strong>Name:</strong> ${employee.firstName} ${employee.lastName}</div>
+          <div><strong>Name:</strong> ${getDisplayName(employee)}</div>
           <div><strong>Employee ID:</strong> ${employee.employeeId}</div>
           <div><strong>Department:</strong> ${employee.department}</div>
           <div><strong>Designation:</strong> ${employee.designation}</div>
@@ -408,7 +408,7 @@ export const appointmentLetterEmailTemplate = (employee) => {
   <body>
       <div class="container">
 
-          <p>Dear <strong>${employee.firstName} ${employee.lastName}</strong>,</p>
+          <p>Dear <strong>${getDisplayName(employee)}</strong>,</p>
 
           <p>We are delighted to officially welcome you to <strong>${process.env.COMPANY_NAME}</strong>.</p>
 
@@ -445,18 +445,6 @@ export const appointmentLetterEmailTemplate = (employee) => {
 };
 
 
-
-
-
-
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// STEP 3 OF 7
-// ADD THESE TWO FUNCTIONS to: utils/emailTemplates.js
-// (paste at the bottom of your existing emailTemplates.js file)
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
  * Relieving letter email template
  * Matches the same dark-teal + orange brand style as appointmentLetterEmailTemplate
@@ -480,7 +468,7 @@ export const relievingLetterEmailTemplate = (employee) => {
 </head>
 <body>
     <div class="container">
-        <p class="greeting">Dear ${employee.firstName} ${employee.lastName},</p>
+        <p class="greeting">Dear ${getDisplayName(employee)},</p>
 
         <p>
             This is to confirm that your resignation has been accepted, and you have been formally relieved 
@@ -492,7 +480,7 @@ export const relievingLetterEmailTemplate = (employee) => {
         </p>
 
         <div class="highlight">
-            <p><strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}</p>
+            <p><strong>Employee Name:</strong> ${getDisplayName(employee)}</p>
             <p><strong>Employee ID:</strong> ${employee.employeeId}</p>
             <p><strong>Designation:</strong> ${employee.designation || '—'}</p>
             <p><strong>Department:</strong> ${employee.department || '—'}</p>
@@ -550,13 +538,13 @@ export const experienceCertificateEmailTemplate = (employee) => {
         </div>
         <div class="orange-line"></div>
         <div class="body">
-            <div class="greeting">Dear ${employee.firstName} ${employee.lastName},</div>
+            <div class="greeting">Dear ${getDisplayName(employee)},</div>
             <p>
                 We are pleased to issue your <strong>Experience Certificate</strong> from
                 <strong>Kiaq Technologies Private Limited</strong>. Please find the document attached.
             </p>
             <div class="highlight">
-                <strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}<br/>
+                <strong>Employee Name:</strong> ${getDisplayName(employee)}<br/>
                 <strong>Employee ID:</strong> ${employee.employeeId}<br/>
                 <strong>Designation:</strong> ${employee.designation || '—'}<br/>
                 <strong>Department:</strong> ${employee.department || '—'}
@@ -595,172 +583,633 @@ const formatDate = (date) => {
 };
 
 
-
+/**
+ * Leave email template — redesigned to match the same dark-teal + orange
+ * brand identity as the other employee documents (appointment letter,
+ * relieving letter, experience certificate), instead of a solid color block.
+ * The status color is now used only as a small accent (badge, left border,
+ * button) rather than as a full background, which reads as far more
+ * professional in an inbox.
+ */
 export const leaveEmailTemplate = (type, data) => {
   let subject, title, message, details, actionText, actionUrl;
-
-  console.log(type, data, "Email Template")
+  let reasonLabel = null;
+  let reasonText = null;
 
   switch (type) {
     case 'REQUEST_TO_HR':
       subject = `New Leave Request - ${data.employeeName}`;
       title = 'New Leave Request';
-      message = `${data.employeeName} has submitted a leave request`;
+      message = `A new leave request has been submitted.`;
+
       details = `
-                <p><strong>Employee:</strong> ${data.employeeName}</p>
-                <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-                <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
-                <p><strong>Reason:</strong> ${data.reason}</p>
-            `;
+  <p>
+    This is to inform you that <strong>${data.employeeName}</strong>
+    (${data.employeeId})
+    has submitted a request for <strong>${data.leaveType}</strong> leave
+    ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }.
+  </p>
+`;
+      reasonLabel = 'Reason for Leave';
+      reasonText = data.reason;
       actionText = 'Review Request';
       actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
       break;
 
     case 'APPROVED_TO_EMPLOYEE':
-      subject = `Leave Request Approved - ${data.requestId}`;
-      title = 'Leave Approved ✅';
-      message = 'Your leave request has been approved';
+      subject = `Leave Approved – ${data.requestId}`;
+      title = 'Leave Approved';
+
+      message = `
+Hi <strong>${data.employeeName}</strong> (${data.employeeId}),
+`;;
+
       details = `
-                <p><strong>Request ID:</strong> ${data.requestId}</p>
-                <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-                <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
-            `;
+    <p>
+      This is to inform you that your <strong>${data.leaveType}</strong>
+      leave request has been approved
+      ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `for <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }.
+    </p>
+  `;
+
       actionText = 'View Details';
       actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
       break;
 
     case 'REJECTED_TO_EMPLOYEE':
-      subject = `Leave Request Update - ${data.requestId}`;
+      subject = `Leave Request Update – ${data.requestId}`;
       title = 'Leave Not Approved';
-      message = 'Your leave request requires attention';
+
+      message = `
+    Hi <strong>${data.employeeName}</strong> (${data.employeeId}),
+  `;
+
       details = `
-                <p><strong>Request ID:</strong> ${data.requestId}</p>
-                <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-                <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
-                <p><strong>Reason:</strong> ${data.rejectedComments || 'Please contact HR'}</p>
-            `;
+    <p>
+      This is to inform you that your <strong>${data.leaveType}</strong>
+      leave request
+      ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }
+      has not been approved.
+    </p>
+  `;
+
+      reasonLabel = 'Reason for Rejection';
+      reasonText = data.rejectedComments || 'Please contact HR for more information.';
+
       actionText = 'Apply Again';
       actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
       break;
 
     case 'CANCELLED_TO_HR':
-      subject = `Leave Cancelled - ${data.employeeName}`;
-      title = data.wasApproved ? '⚠ Approved Leave Cancelled' : 'Leave Request Cancelled';
-      message = data.wasApproved
-        ? `${data.employeeName} has cancelled a previously approved leave`
-        : `${data.employeeName} has cancelled their leave request`;
+      subject = `Leave Cancelled – ${data.employeeName}`;
+      title = 'Leave Cancelled';
+
+      message = 'A leave request has been cancelled.';
+
       details = `
-        <p><strong>Employee:</strong> ${data.employeeName}</p>
-        <p><strong>Request ID:</strong> ${data.requestId}</p>
-        <p><strong>Leave Type:</strong> ${data.leaveType}</p>
-        <p><strong>Dates:</strong> ${formatDate(data.startDate)} - ${formatDate(data.endDate)}</p>
-        <p><strong>Total Days:</strong> ${data.totalDays}</p>
-        ${data.wasApproved ? '<p style="color:#ef4444;"><strong>⚠ This leave was already approved.</strong></p>' : ''}
-    `;
+ <p>
+  This is to inform you that <strong>${data.employeeName}</strong>
+  ${data.employeeId ? `(<strong>${data.employeeId}</strong>)` : ''}
+  has cancelled their <strong>${data.leaveType}</strong> leave
+  ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }.
+</p>
+  `;
+
+      reasonLabel = 'Cancellation Reason';
+      reasonText = data.cancelReason || 'No reason provided.';
+
       actionText = 'View Leave Management';
       actionUrl = `${process.env.FRONTEND_EMPLOYER_HR}/leavemanagement`;
       break;
+
+    case 'CANCELLED_TO_EMPLOYEE':
+      subject = `Leave Cancellation Confirmed – ${data.requestId}`;
+      title = 'Leave Cancelled';
+
+      message = 'Your leave cancellation has been processed successfully.';
+
+      details = `
+    <p>
+      Your <strong>${data.leaveType}</strong> leave
+      ${formatDate(data.startDate) === formatDate(data.endDate)
+          ? `on <strong>${formatDate(data.startDate)}</strong>`
+          : `from <strong>${formatDate(data.startDate)}</strong> to <strong>${formatDate(data.endDate)}</strong>`
+        }
+      has been cancelled successfully.
+    </p>
+  `;
+
+      actionText = 'View Leave History';
+      actionUrl = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/leavemanagement`;
+      break;
   }
 
-  const color = type === 'APPROVED_TO_EMPLOYEE' ? '#10b981'
+  // Accent color: used only for the status badge, the details left-border,
+  // and the button — never as a full-page background.
+  const accentColor = type === 'APPROVED_TO_EMPLOYEE' ? '#10b981'
     : type === 'REJECTED_TO_EMPLOYEE' ? '#ef4444'
       : type === 'CANCELLED_TO_HR' ? '#ef4444'
-        : '#f59e0b'; // REQUEST_TO_HR and fallback
+        : type === 'CANCELLED_TO_EMPLOYEE' ? '#64748b'
+          : '#E05C1A';                                                 // REQUEST_TO_HR / fallback — brand orange
+
+  const badgeLabel = type === 'APPROVED_TO_EMPLOYEE' ? 'Approved'
+    : type === 'REJECTED_TO_EMPLOYEE' ? 'Action Needed'
+      : type === 'CANCELLED_TO_HR' ? 'Cancelled'
+        : type === 'CANCELLED_TO_EMPLOYEE' ? 'Cancelled'
+          : 'Pending Review';
+
+  const companyName = process.env.COMPANY_NAME || 'KIAQ Technologies Private Limited';
 
   return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f5f7fa;
-      margin: 0;
-      padding: 20px;
-      color: #333;
-      line-height: 1.6;
+    body { margin: 0; padding: 0; background: #f4f4f4; font-family: Arial, Helvetica, sans-serif; color: #111111; }
+    .wrap { max-width: 600px; margin: 30px auto; background: #ffffff; border-radius: 8px; overflow: hidden; }
+    .top-bar { background: #002B38; padding: 20px 32px; }
+    .brand { font-size: 20px; font-weight: bold; color: #ffffff; }
+    .brand span { color: #E05C1A; }
+    .orange-line { height: 4px; background: #E05C1A; }
+    .body { padding: 32px; }
+    .badge {
+      display: inline-block; font-size: 11px; font-weight: bold; letter-spacing: .5px;
+      text-transform: uppercase; color: ${accentColor}; border: 1px solid ${accentColor};
+      border-radius: 4px; padding: 4px 10px; margin-bottom: 16px;
     }
-    
-    .container {
-      max-width: 600px;
-      margin: 0 auto;
-      background: white;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    h2.title { font-size: 19px; color: #002B38; margin: 0 0 12px; }
+    p { font-size: 14px; line-height: 1.7; margin: 8px 0; color: #333333; }
+  .details {
+  padding: 0;
+  margin: 16px 0;
+  font-size: 14px;
+}
+    .details p { margin: 6px 0; }
+    .reason-block { margin: 18px 0 6px; }
+    .reason-label {
+  font-size: 18px;
+  font-weight: 900;
+  color: #002B38;
+  margin-bottom: 8px;
+}
     }
-    
-    .header {
-      background: ${color};
-      color: white;
-      padding: 20px;
-      text-align: center;
+    .reason-text {
+      background: #fafafa; border: 1px solid #e8e8e8; border-radius: 4px;
+      padding: 14px 16px; margin: 0; font-size: 14px; line-height: 1.7;
+      color: #333333; white-space: pre-wrap;
     }
-    
-    .title {
-      font-size: 22px;
-      font-weight: bold;
-      margin: 10px 0;
-    }
-    
-    .content {
-      padding: 25px;
-    }
-    
-    .message-box {
-      background: #f8fafc;
-      padding: 20px;
-      border-radius: 6px;
-      margin: 15px 0;
-      background: ${color};
-    }
-    
-    .btn {
-      display: inline-block;
-      background: ${color};
-      color: white;
-      padding: 12px 25px;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: bold;
-      margin: 15px 0;
-    }
-    
-    .footer {
-      text-align: center;
-      padding: 20px;
-      background: #1e293b;
-      color: #cbd5e1;
-      font-size: 12px;
-    }
+    .btn-wrap { margin: 26px 0 18px; }
+  .btn {
+  display: inline-block;
+  background: #E05C1A;
+  color: #ffffff !important;
+  padding: 12px 24px;
+  text-decoration: none !important;
+  border-radius: 6px;
+  font-weight: bold;
+  font-size: 14px;
+}
+    .note { font-size: 12px; color: #777777; font-style: italic; margin-top: 22px; }
+    .footer { background: #002B38; padding: 16px 32px; text-align: center; }
+    .footer p { color: #9aa7ad; font-size: 11px; margin: 0; line-height: 1.7; }
   </style>
 </head>
-
 <body>
-  <div class="container">
-    <div class="header">
-      <div class="title">${title}</div>
-      <div>${process.env.COMPANY_NAME || 'Leave Management'}</div>
-    </div>
-    
-    <div class="content">
+  <div class="wrap">
+ 
+    <div class="body">
+
+    <h2 class="title">${title}</h2>
       <p>${message}</p>
-      
-      <div class="message-box">
-        ${details}
+      <div class="details">${details}</div>
+      ${reasonText ? `
+      <div class="reason-block">
+<div class="reason-label">
+  <strong>${reasonLabel}</strong>
+</div>
+        <p class="reason-text">${reasonText}</p>
+      </div>` : ''}
+      <div class="btn-wrap">
+<a
+  href="${actionUrl}"
+  target="_blank"
+  style="
+    background:#E05C1A;
+    color:#ffffff;
+    text-decoration:none;
+    padding:12px 24px;
+    border-radius:6px;
+    display:inline-block;
+    font-weight:bold;
+  "
+>
+  ${actionText}
+</a>
       </div>
-      
-      <center>
-        <a href="${actionUrl}" class="btn" target="_blank">${actionText}</a>
-      </center>
-      
-      <p style="margin-top: 20px; font-size: 14px; color: #64748b;">
-        This is an automated message. Please do not reply.
-      </p>
+<div
+  style="
+    margin-top:30px;
+    text-align:center;
+    color:#666666;
+    font-size:13px;
+    font-style:italic;
+  "
+>
+  This is an automated message. Please do not reply.
+</div>
     </div>
   </div>
 </body>
 </html>
 `;
+};
+
+
+export const permissionEmailTemplate = (type, data) => {
+  let subject, title, message, details, actionText, actionUrl;
+  let reasonLabel = null;
+  let reasonText = null;
+
+  switch (type) {
+    case 'REQUEST_TO_HR':
+      subject = `New Permission Request - ${data.employeeName}`;
+      title   = 'New Permission Request';
+      message = 'A new permission request has been submitted.';
+      details = `
+        <p>
+          This is to inform you that <strong>${data.employeeName}</strong>
+          (${data.employeeId})
+          has submitted a permission request on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>
+          (<strong>${data.durationText}</strong>).
+        </p>
+      `;
+      reasonLabel = 'Reason for Permission';
+      reasonText  = data.reason;
+      actionText  = 'Review Request';
+      actionUrl   = `${process.env.FRONTEND_EMPLOYER_HR}/permissions`;
+      break;
+
+    case 'APPROVED_TO_EMPLOYEE':
+      subject = `Permission Approved – ${data.requestId}`;
+      title   = 'Permission Approved';
+      message = `Hi <strong>${data.employeeName}</strong> (${data.employeeId}),`;
+      details = `
+        <p>
+          This is to inform you that your permission request on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>
+          (<strong>${data.durationText}</strong>) has been approved.
+        </p>
+      `;
+      if (data.approvedComments) {
+        reasonLabel = 'HR Comment';
+        reasonText  = data.approvedComments;
+      }
+      actionText = 'View Details';
+      actionUrl  = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/permissions-management`;
+      break;
+
+    case 'REJECTED_TO_EMPLOYEE':
+      subject = `Permission Request Update – ${data.requestId}`;
+      title   = 'Permission Not Approved';
+      message = `Hi <strong>${data.employeeName}</strong> (${data.employeeId}),`;
+      details = `
+        <p>
+          This is to inform you that your permission request on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>
+          has not been approved.
+        </p>
+      `;
+      reasonLabel = 'Reason for Rejection';
+      reasonText  = data.rejectedComments || 'Please contact HR for more information.';
+      actionText  = 'Apply Again';
+      actionUrl   = `${process.env.FRONTEND_EMPLOYER_EMPLOYEE}/permissions-management`;
+      break;
+
+    case 'CANCELLED_TO_HR':
+      subject = `Permission Cancelled – ${data.employeeName}`;
+      title   = 'Permission Cancelled';
+      message = 'A permission request has been cancelled.';
+      details = `
+        <p>
+          This is to inform you that <strong>${data.employeeName}</strong>
+          ${data.employeeId ? `(<strong>${data.employeeId}</strong>)` : ''}
+          has cancelled their permission on
+          <strong>${formatDate(data.date)}</strong> from
+          <strong>${data.fromTime}</strong> to <strong>${data.toTime}</strong>.
+        </p>
+      `;
+      reasonLabel = 'Cancellation Reason';
+      reasonText  = data.cancelReason || 'No reason provided.';
+      actionText  = 'View Permissions';
+      actionUrl   = `${process.env.FRONTEND_EMPLOYER_HR}/permissions`;
+      break;
+  }
+
+  const accentColor = type === 'APPROVED_TO_EMPLOYEE' ? '#10b981'
+    : type === 'REJECTED_TO_EMPLOYEE' ? '#ef4444'
+      : type === 'CANCELLED_TO_HR' ? '#ef4444'
+        : '#E05C1A';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin:0; padding:0; background:#f4f4f4; font-family:Arial,Helvetica,sans-serif; color:#111; }
+    .wrap { max-width:600px; margin:30px auto; background:#fff; border-radius:8px; overflow:hidden; }
+    .body { padding:32px; }
+    h2.title { font-size:19px; color:#002B38; margin:0 0 12px; }
+    p { font-size:14px; line-height:1.7; margin:8px 0; color:#333; }
+    .details { padding:0; margin:16px 0; font-size:14px; }
+    .reason-block { margin:18px 0 6px; }
+    .reason-label { font-size:18px; font-weight:900; color:#002B38; margin-bottom:8px; }
+    .reason-text {
+      background:#fafafa; border:1px solid #e8e8e8; border-radius:4px;
+      padding:14px 16px; margin:0; font-size:14px; line-height:1.7;
+      color:#333; white-space:pre-wrap;
+    }
+    .btn-wrap { margin:26px 0 18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="body">
+      <h2 class="title">${title}</h2>
+      <p>${message}</p>
+      <div class="details">${details}</div>
+      ${reasonText ? `
+      <div class="reason-block">
+        <div class="reason-label"><strong>${reasonLabel}</strong></div>
+        <p class="reason-text">${reasonText}</p>
+      </div>` : ''}
+      <div class="btn-wrap">
+        <a href="${actionUrl}" target="_blank"
+           style="background:${accentColor};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;display:inline-block;font-weight:bold;">
+          ${actionText}
+        </a>
+      </div>
+      <div style="margin-top:30px;text-align:center;color:#666;font-size:13px;font-style:italic;">
+        This is an automated message. Please do not reply.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+`;
+};
+
+
+export const passwordChangedByAdminTemplate = (employee, newPassword) => {
+  const companyName = process.env.COMPANY_NAME || 'Company';
+  const portalUrl = process.env.FRONTEND_EMPLOYER_EMPLOYEE || '#';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #111111;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: bold;
+      margin: 0 0 16px;
+      color: #111111;
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: bold;
+      margin: 22px 0 8px;
+      color: #111111;
+    }
+    p {
+      font-size: 14px;
+      line-height: 1.7;
+      margin: 10px 0;
+      color: #333333;
+    }
+    .btn {
+      display: inline-block;
+      background: #E05C1A;
+      color: #ffffff !important;
+      padding: 12px 26px;
+      text-decoration: none !important;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 14px;
+      margin-top: 18px;
+    }
+    .note {
+      margin-top: 28px;
+      font-size: 13px;
+      color: #888888;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <h2>Password Reset</h2>
+
+    <p>Your account password has been updated.</p>
+
+    <p>
+      This is to inform you that <strong>${getDisplayName(employee)}</strong>
+      (<strong>${employee.employeeId}</strong>), your account password for the
+      <strong>${companyName}</strong> Employee Portal has been reset by HR / Admin.
+      Please use the new credentials below to log in.
+    </p>
+
+    <h3>Login Credentials</h3>
+
+    <p>
+      <strong>Employee ID:</strong> ${employee.employeeId}<br/>
+      <strong>Official Email:</strong> ${employee.officialEmail}<br/>
+      <strong>New Password:</strong> ${newPassword}
+    </p>
+
+    <h3>Important Note</h3>
+
+    <p>
+      Please <strong>keep this password safe</strong>. For security reasons, this
+      password will not be regenerated or resent frequently. Store it in a secure
+      place and do not share it with anyone.
+    </p>
+
+    <a href="${portalUrl}" target="_blank" class="btn">Login to Portal</a>
+
+    <p class="note">This is an automated message. Please do not reply.</p>
+
+  </div>
+</body>
+</html>
+  `;
+};
+
+
+
+
+
+// add to utils/emailTemplates.js
+
+export const appraisalLetterEmailTemplate = (employee, appraisal) => {
+  const formattedPrevious = Number(appraisal.previousAnnualSalary).toLocaleString('en-IN');
+  const formattedNew      = Number(appraisal.newAnnualSalary).toLocaleString('en-IN');
+  const increment         = Number(appraisal.percentageIncrement);
+  const effectiveDate     = new Date(appraisal.effectiveDate).toLocaleDateString('en-GB', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  });
+  const companyName = process.env.COMPANY_NAME || 'Kiaq Technologies Private Limited';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            font-family: Arial, Helvetica, sans-serif;
+            color: #222222;
+        }
+        .wrap {
+            max-width: 620px;
+            margin: 0 auto;
+            background: #ffffff;
+        }
+        .body {
+            padding: 32px 0;
+        }
+        .subject {
+            font-size: 15px;
+            font-weight: bold;
+            color: #111111;
+            margin: 0 0 22px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e8e8e8;
+        }
+        p {
+            font-size: 14px;
+            line-height: 1.85;
+            margin: 0 0 16px;
+            color: #333333;
+        }
+        .closing {
+            margin-top: 28px;
+        }
+        .signature {
+            margin-top: 6px;
+            font-size: 14px;
+            color: #111111;
+        }
+        .signature strong {
+            display: block;
+            font-size: 14px;
+        }
+        .divider {
+            border: none;
+            border-top: 1px solid #eeeeee;
+            margin: 28px 0;
+        }
+        .disclaimer {
+            font-size: 12px;
+            color: #888888;
+            font-style: italic;
+            margin: 0;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="body">
+
+            <div class="subject">Letter of Salary Revision</div>
+
+            <p>Dear <strong>${getDisplayName(employee)},</strong></p>
+
+            <p>
+                We are pleased to inform you that, in recognition of your performance and valuable
+                contribution to <strong>${companyName}</strong>, your compensation has been revised with effect
+                from <strong>${effectiveDate}</strong>.
+            </p>
+
+            <p>
+                Your revised Annual Cost to Company (CTC) has been set at
+                <strong>INR ${formattedNew}</strong>, reflecting an increment of
+                <strong>${increment}%</strong> over your previous Annual CTC of
+                <strong>INR ${formattedPrevious}</strong>. A detailed compensation
+                breakup is enclosed as an annexure in the attached appraisal letter for
+                your reference.
+            </p>
+
+            <p>
+                Please find the appraisal letter attached to this email. We encourage you
+                to review the document at your earliest convenience. Should you have any
+                queries regarding the revised structure, you are welcome to reach out to
+                the HR department at <strong>hr@kiaq.in</strong>.
+            </p>
+
+            <p>
+                We sincerely appreciate your dedication and the consistent effort you bring
+                to your role. We look forward to your continued growth and contribution
+                to the organisation.
+            </p>
+
+            <div class="closing">
+                <p style="margin:0;">Warm regards,</p>
+                <div class="signature">
+                    <strong>${process.env.HR_NAME || 'Hazeena Begum A'}</strong>
+                    ${process.env.HR_TITLE || 'SR Executive – Human Resource'}<br/>
+                    ${companyName}
+                </div>
+            </div>
+
+            <hr class="divider" />
+
+            <p class="disclaimer">
+                This is a system-generated email. Please do not reply directly to this message.
+                For any assistance, contact hr@kiaq.in.
+            </p>
+
+        </div>
+    </div>
+</body>
+</html>
+  `;
 };

@@ -1,4 +1,5 @@
 import Notification from "../model/Notification.js";
+import { getDisplayName } from '../utils/displayName.js';
 
 const formatDate = (date) =>
     new Date(date).toLocaleDateString('en-GB', {
@@ -14,7 +15,7 @@ class NotificationService {
         console.log(createdBy)
         return await Notification.createNotification({
             title: 'New Employee Added',
-            description: `New employee ${employee.firstName} ${employee.lastName} has been added to the system.`,
+            description: `New employee ${getDisplayName(employee)} has been added to the system.`,
             type: 'EMPLOYEE_CREATED',
             recipientType: 'EMPLOYER_ADMIN',
             recipientId: createdBy._id,
@@ -37,7 +38,7 @@ class NotificationService {
         for (const hrUser of hrUsers) {
             const notification = await Notification.createNotification({
                 title: 'Employee Update Request',
-                description: `${employee.firstName} ${employee.lastName} has requested profile update.`,
+                description: `${getDisplayName(employee)} has requested profile update.`,
                 type: 'EMPLOYEE_UPDATE_REQUEST',
                 recipientType: hrUser.role,
                 recipientId: hrUser._id,
@@ -101,7 +102,7 @@ class NotificationService {
         for (const hrUser of hrUsers) {
             const notification = await Notification.createNotification({
                 title: 'New Document Uploaded',
-                description: `${employee.firstName} ${employee.lastName} uploaded ${documentType}.`,
+                description: `${getDisplayName(employee)} uploaded ${documentType}.`,
                 type: 'DOCUMENT_UPLOADED',
                 recipientType: hrUser.role,
                 recipientId: hrUser._id,

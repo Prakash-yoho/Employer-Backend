@@ -5,10 +5,19 @@ import { s3 } from '../config/s3.js';
 import { v4 as uuidv4 } from "uuid";
 import Employee from '../model/Employee.js';
 import Holiday from "../model/Holiday.js";
-import OfficeTiming from "../model/OfficeTiming.js";
+import OfficeTiming from "../model/Officetiming.js";
 import BreakPolicy from "../model/BreakPolicy.js";
-import { hhmmToMinutes, timeStrToMinutes } from "./officeTimingController.js";
+import { hhmmToMinutes, timeStrToMinutes } from "./Officetimingcontroller.js";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+// import { getNow } from "../utils/trueTime.js";
+import { getNow, correctedDate } from "../utils/trueTime.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const IST = "Asia/Kolkata";
 
 const bucketName = process.env.AWS_S3_BUCKET;
 const awsregion = process.env.AWS_REGION;
@@ -49,14 +58,7 @@ function parseLocation(location) {
   };
 }
 
-// Get current date & time
-function getNow() {
-  const now = new Date();
-  return {
-    date: now.toISOString().split("T")[0],
-    time: now.toLocaleTimeString(),
-  };
-}
+
 
 /** Lazily fetch (or create) the singleton OfficeTiming document. */
 async function getOfficeTiming() {
@@ -83,11 +85,13 @@ export const clockIn = async (req, res) => {
 
     // ── Office timing check ──────────────────────────────────────────────────
     const timing = await getOfficeTiming();
-    const cutoffMins = hhmmToMinutes(timing.startTime) + timing.graceMinutes;
+    const startTimeMins = hhmmToMinutes(timing.startTime);
+    const cutoffMins = startTimeMins + timing.graceMinutes;
     const clockInMin = timeStrToMinutes(time);
 
     const lateLogin = clockInMin != null && clockInMin > cutoffMins;
-    const lateByMinutes = lateLogin ? Math.round(clockInMin - cutoffMins) : null;
+    // Late minutes counted from actual start time, not from grace cutoff
+    const lateByMinutes = lateLogin ? Math.round(clockInMin - startTimeMins) : null;
 
     const [clockInImage, clockInLocation] = await Promise.all([
       uploadImage(image, "clock-in"),
@@ -160,17 +164,17 @@ export const startBreak = async (req, res) => {
       }
     }
 
-    const startImage    = await uploadImage(image, "break-start");
+    const startImage = await uploadImage(image, "break-start");
     const startLocation = parseLocation(location);
 
     attendance.breaks.push({
-      start:          time,
-      end:            null,
+      start: time,
+      end: null,
       startImage,
       startLocation,
       breakType,
       allowedMinutes: slot?.allowedMinutes ?? null,
-      overByMinutes:  null,
+      overByMinutes: null,
       isBreakViolation: false,
     });
 
@@ -202,21 +206,21 @@ export const endBreak = async (req, res) => {
     if (!lastBreak || lastBreak.end)
       return res.status(404).json({ error: "No active break to end" });
 
-    const endImage    = await uploadImage(image, "break-end");
+    const endImage = await uploadImage(image, "break-end");
     const endLocation = parseLocation(location);
 
     // ── Compute duration & violation ─────────────────────────────────────────
     const durationMins = calcDurationMinutes(lastBreak.start, time);
-    const allowed      = lastBreak.allowedMinutes;
+    const allowed = lastBreak.allowedMinutes;
     const overByMinutes =
       allowed != null && durationMins != null && durationMins > allowed
         ? Math.round(durationMins - allowed)
         : null;
 
-    lastBreak.end              = time;
-    lastBreak.endImage         = endImage;
-    lastBreak.endLocation      = endLocation;
-    lastBreak.overByMinutes    = overByMinutes;
+    lastBreak.end = time;
+    lastBreak.endImage = endImage;
+    lastBreak.endLocation = endLocation;
+    lastBreak.overByMinutes = overByMinutes;
     lastBreak.isBreakViolation = overByMinutes != null && overByMinutes > 0;
 
     attendance.markModified("breaks");
@@ -225,11 +229,11 @@ export const endBreak = async (req, res) => {
     return res.json({
       ...attendance.toObject(),
       _breakFeedback: {
-        breakType:    lastBreak.breakType,
+        breakType: lastBreak.breakType,
         durationMins,
         allowedMinutes: allowed,
         overByMinutes,
-        isViolation:  lastBreak.isBreakViolation,
+        isViolation: lastBreak.isBreakViolation,
       },
     });
   } catch (err) {
@@ -316,7 +320,7 @@ export const getLogs = async (req, res) => {
 
     // ── Shared helper ─────────────────────────────────────────────────────────
     const buildCalendar = (logs, holidayDocs, startDate, endDate) => {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getNow().date;
 
       // Build holidayMap: "YYYY-MM-DD" → full holiday doc
       const holidayMap = {};
@@ -435,7 +439,29 @@ export const getLogs = async (req, res) => {
     }
 
     // ── Day view / fallback ───────────────────────────────────────────────────
-    res.json(logs);
+    // Attach the office timing snapshot so the client can show the correct
+    // late-login cutoff (startTime + grace) after a page refresh. Without this
+    // the frontend has no startTime and renders "NaN:NaN".
+    const timing = await getOfficeTiming();
+    const officeTimingPayload = {
+      startTime: timing.startTime,
+      endTime: timing.endTime,
+      graceMinutes: timing.graceMinutes,
+    };
+
+    const enriched = logs.map((l) => {
+      const obj = l.toObject ? l.toObject() : { ...l };
+      obj._officeTiming = {
+        ...officeTimingPayload,
+        lateLogin: obj.lateLogin ?? false,
+        lateByMinutes: obj.lateByMinutes ?? null,
+        earlyLogout: obj.earlyLogout ?? false,
+        earlyByMinutes: obj.earlyByMinutes ?? null,
+      };
+      return obj;
+    });
+
+    res.json(enriched);
 
   } catch (err) {
     console.error("Get Logs Error:", err);
@@ -475,8 +501,10 @@ export const getAttendanceImageUrl = async (req, res) => {
       ResponseContentType: "image/jpeg",
     });
 
-    const signedUrl = await getSignedUrl(s3, command, { expiresIn: 60 * 5 }); // 5 min
-
+    const signedUrl = await getSignedUrl(s3, command, {
+      expiresIn: 60 * 5,
+      signingDate: correctedDate(),   // ← true time, overrides presigner default
+    });
     return res.status(200).json({
       success: true,
       signedUrl,
@@ -505,7 +533,7 @@ export const getAttendanceLogImages = async (req, res) => {
         let s3Key = url.split(".amazonaws.com/")[1];
         if (s3Key?.includes("?")) s3Key = s3Key.split("?")[0];
         const cmd = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-        return await getSignedUrl(s3, cmd, { expiresIn: 300 });
+        return await getSignedUrl(s3, cmd, { expiresIn: 300, signingDate: correctedDate() });
       } catch { return null; }
     };
 
@@ -559,7 +587,10 @@ const signUrl = async (url) => {
     let s3Key = url.split(".amazonaws.com/")[1];
     if (s3Key?.includes("?")) s3Key = s3Key.split("?")[0];
     const cmd = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-    return await getSignedUrl(s3, cmd, { expiresIn: 300 });
+    return await getSignedUrl(s3, cmd, {
+      expiresIn: 300,
+      signingDate: correctedDate(),
+    });
   } catch {
     return null;
   }
@@ -589,13 +620,174 @@ const calcDurationMinutes = (start, end) => {
   return Math.floor(diffSeconds / 60);
 };
 
+// ─── Break status per configured break slot (for the HR attendance view) ───────
+// status: TAKEN (within allowed time) | VIOLATED (over allowed time) |
+//         NOT_TAKEN (day finished and the break was never taken) |
+//         PENDING   (today, still working — the break may still come)
+async function getBreakSlots() {
+  const doc = await BreakPolicy.findOne({ key: "default" }).lean();
+  const slots = doc?.slots?.length
+    ? doc.slots
+    : [
+        { type: "MORNING", label: "Morning Break", allowedMinutes: 15, isActive: true },
+        { type: "LUNCH",   label: "Lunch Break",   allowedMinutes: 60, isActive: true },
+        { type: "EVENING", label: "Evening Break", allowedMinutes: 15, isActive: true },
+      ];
+  return slots.filter((s) => s.isActive !== false);
+}
+
+const buildBreakStatus = (log, slots) => {
+  if (!log?.clockIn) return null; // absent / holiday — nothing to show
+  const pendingDay = log.date === getNow().date && !log.clockOut;
+  return slots.map((s) => {
+    const taken = (log.breaks ?? []).filter((b) => b.breakType === s.type);
+    if (taken.length === 0) {
+      return {
+        type: s.type, label: s.label || s.type, allowedMinutes: s.allowedMinutes,
+        status: pendingDay ? "PENDING" : "NOT_TAKEN",
+        takenMinutes: 0, overByMinutes: 0,
+      };
+    }
+    const violated = taken.some((b) => b.isBreakViolation);
+    const takenMinutes = taken.reduce((a, b) => a + (calcDurationMinutes(b.start, b.end) || 0), 0);
+    const overByMinutes = taken.reduce((a, b) => a + (b.overByMinutes || 0), 0);
+    return {
+      type: s.type, label: s.label || s.type, allowedMinutes: s.allowedMinutes,
+      status: violated ? "VIOLATED" : "TAKEN", takenMinutes, overByMinutes,
+    };
+  });
+};
+
+
+// ─── Shared per-employee calendar builder ─────────────────────────────────────
+// Called for both ?month/year and the new ?startDate/endDate (salary cycle) mode
+const buildEmployeeCalendarRange = async ({
+  employeeId, startDate, endDate, timing, todayStr, computeViolations,
+}) => {
+  const capEnd = endDate > todayStr ? todayStr : endDate;
+  const breakSlots = await getBreakSlots();
+
+  const years = [
+    ...new Set([
+      parseInt(startDate.split("-")[0]),
+      parseInt(capEnd.split("-")[0]),
+    ]),
+  ];
+
+  const [logs, holidayDocs] = await Promise.all([
+    Attendance.find({ employeeId, date: { $gte: startDate, $lte: capEnd } })
+      .sort({ date: -1 }).lean(),
+    Holiday.find({ year: { $in: years } }).lean(),
+  ]);
+
+  const logMap = Object.fromEntries(logs.map(l => [l.date, l]));
+  const holidayMap = {};
+  for (const h of holidayDocs)
+    holidayMap[dayjs.utc(h.date).format("YYYY-MM-DD")] = h;
+
+  const fullCalendar = [];
+  const cursor = new Date(startDate + "T00:00:00Z");
+  const end = new Date(capEnd + "T00:00:00Z");
+
+  while (cursor <= end) {
+    const dateStr = cursor.toISOString().split("T")[0];
+    const dow = cursor.getUTCDay();
+
+    if (dateStr > todayStr) { cursor.setUTCDate(cursor.getUTCDate() + 1); continue; }
+
+    const isWeekend = dow === 0 || dow === 6;
+    const hDoc = holidayMap[dateStr] ?? null;
+    const isHoliday = !!hDoc;
+
+    if (logMap[dateStr]) {
+      const log = logMap[dateStr];
+      const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
+      const breakMinutes = log.breaks.reduce(
+        (acc, b) => acc + (calcDurationMinutes(b.start, b.end) || 0), 0,
+      );
+      const violations = computeViolations(log);
+
+      fullCalendar.push({
+        _id: log._id, date: log.date,
+        clockIn: log.clockIn ?? null, clockOut: log.clockOut ?? null,
+        clockInLocation: log.clockInLocation ?? null,
+        clockOutLocation: log.clockOutLocation ?? null,
+        breaks: log.breaks.map(b => ({
+          start: b.start, end: b.end ?? null,
+          startLocation: b.startLocation, endLocation: b.endLocation,
+          duration: calcDurationMinutes(b.start, b.end),
+        })),
+        totalBreaks: log.breaks.length,
+        breakStatus: buildBreakStatus(log, breakSlots),
+        workDurationMinutes: workMinutes,
+        breakDurationMinutes: breakMinutes,
+        netWorkMinutes: workMinutes != null ? workMinutes - breakMinutes : null,
+        status: log.clockOut ? "present" : log.clockIn ? "incomplete" : "absent",
+        isHoliday, holidayName: hDoc?.name ?? null, holidayType: hDoc?.type ?? null,
+        lateLogin: log.lateLogin ?? false, lateByMinutes: log.lateByMinutes ?? null,
+        earlyLogout: log.earlyLogout ?? false, earlyByMinutes: log.earlyByMinutes ?? null,
+        violations, hasViolations: violations.length > 0,
+      });
+
+    } else if (isHoliday || isWeekend) {
+      let statusLabel, holidayType;
+      if (isHoliday) {
+        const lbl = { GOVERNMENT: "Government Holiday", OPTIONAL: "Optional Holiday", COMPANY: "Company Holiday" }[hDoc.type] ?? "Holiday";
+        statusLabel = `${hDoc.name} · ${lbl}`; holidayType = hDoc.type;
+      } else {
+        statusLabel = dow === 0 ? "Sunday · Weekend" : "Saturday · Weekend";
+        holidayType = "WEEKEND";
+      }
+      fullCalendar.push({
+        _id: `holiday-${dateStr}`, employeeId, date: dateStr,
+        status: "holiday", holidayType, statusLabel,
+        clockIn: null, clockOut: null, breaks: [], totalBreaks: 0,
+        workDurationMinutes: null, breakDurationMinutes: 0, netWorkMinutes: null,
+        lateLogin: false, lateByMinutes: null, earlyLogout: false, earlyByMinutes: null,
+        violations: [], hasViolations: false,
+      });
+
+    } else {
+      fullCalendar.push({
+        _id: `absent-${dateStr}`, employeeId, date: dateStr,
+        status: "absent", statusLabel: "No attendance marked for the day",
+        clockIn: null, clockOut: null, breaks: [], totalBreaks: 0,
+        workDurationMinutes: null, breakDurationMinutes: 0, netWorkMinutes: null,
+        lateLogin: false, lateByMinutes: null, earlyLogout: false, earlyByMinutes: null,
+        violations: [], hasViolations: false,
+      });
+    }
+
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  fullCalendar.sort((a, b) => (a.date > b.date ? -1 : 1));
+
+  const summary = {
+    present: fullCalendar.filter(l => l.status === "present").length,
+    incomplete: fullCalendar.filter(l => l.status === "incomplete").length,
+    absent: fullCalendar.filter(l => l.status === "absent").length,
+    holidays: fullCalendar.filter(l => l.status === "holiday").length,
+    late: fullCalendar.filter(l => l.lateLogin).length,
+    earlyLogout: fullCalendar.filter(l => l.earlyLogout).length,
+    missedLogout: fullCalendar.filter(l =>
+      l.violations?.some(v => v.type === "MISSED_LOGOUT")
+    ).length,
+    totalWorkMinutes: fullCalendar.reduce((a, l) => a + (l.netWorkMinutes ?? 0), 0),
+  };
+
+  return { fullCalendar, summary };
+};
+
+
 // ─── GET /api/admin/attendance ────────────────────────────────────────────────
 // Returns paginated list of all employees with their latest attendance summary
 export const getAllEmployeesAttendance = async (req, res) => {
   try {
+    const breakSlots = await getBreakSlots();
     const { page = 1, limit = 10, date, search, status } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const targetDate = date || new Date().toISOString().split("T")[0];
+    const targetDate = date || getNow().date;
 
     // ── Fetch OfficeTiming dynamically ─────────────────────────────────
     const timing = await OfficeTiming.findOne({ key: "default" });
@@ -748,8 +940,12 @@ export const getAllEmployeesAttendance = async (req, res) => {
       clockIn: emp.clockIn,
       clockOut: emp.clockOut,
       status: emp.attendanceStatus,
-      totalBreaks: emp.totalBreaks,
-      hasActiveBreak: emp.hasActiveBreak,
+      totalBreaks: emp.breaks?.length ?? 0,
+      hasActiveBreak: (emp.breaks ?? []).some((b) => b.start && !b.end),
+      breakStatus: buildBreakStatus(
+        { date: targetDate, clockIn: emp.clockIn, clockOut: emp.clockOut, breaks: emp.breaks },
+        breakSlots,
+      ),
       totalDays: 0,
       presentDays: 0,
     }));
@@ -776,8 +972,9 @@ export const getAllEmployeesAttendance = async (req, res) => {
 // Returns paginated attendance logs for a specific employee
 export const getEmployeeAttendanceLogs = async (req, res) => {
   try {
+    const breakSlots = await getBreakSlots();
     const { employeeId } = req.params;
-    const { page = 1, limit = 20, month, year } = req.query;
+    const { page = 1, limit = 20, month, year, startDate, endDate } = req.query;
 
     const filter = { employeeId };
 
@@ -789,7 +986,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
 
     // ── Read OfficeTiming once for violation messages ─────────────────────────
     const timing = await getOfficeTiming();
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = getNow().date;
 
     // ── Build violations from already-stored fields on the Attendance doc ─────
     //
@@ -918,6 +1115,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
               duration: calcDurationMinutes(b.start, b.end),
             })),
             totalBreaks: log.breaks.length,
+            breakStatus: buildBreakStatus(log, breakSlots),
             workDurationMinutes: workMinutes,
             breakDurationMinutes: totalBreakMinutes,
             netWorkMinutes:
@@ -1031,6 +1229,23 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       });
     }
 
+
+    // ─── Salary-cycle / custom date-range view ────────────────────────────────────
+    // Triggered by ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+    if (startDate && endDate) {
+      const { fullCalendar, summary } = await buildEmployeeCalendarRange({
+        employeeId, startDate, endDate, timing, todayStr, computeViolations,
+      });
+
+      return res.status(200).json({
+        success: true,
+        employeeId,
+        cycleRange: { startDate, endDate },  // echo back so frontend can display it
+        data: fullCalendar,
+        summary,
+      });
+    }
+
     // ── Paginated fallback (no month/year filter) ─────────────────────────────
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const total = await Attendance.countDocuments(filter);
@@ -1062,6 +1277,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
           duration: calcDurationMinutes(b.start, b.end),
         })),
         totalBreaks: log.breaks.length,
+        breakStatus: buildBreakStatus(log, breakSlots),
         workDurationMinutes: workMinutes,
         breakDurationMinutes: totalBreakMinutes,
         netWorkMinutes:
@@ -1168,7 +1384,7 @@ export const getEmployeeLogDetail = async (req, res) => {
 export const getAttendanceSummary = async (req, res) => {
   try {
     const { date } = req.query;
-    const targetDate = date || new Date().toISOString().split("T")[0];
+    const targetDate = date || getNow().date;
 
     const [todayLogs, totalEmployees] = await Promise.all([
       Attendance.find({ date: targetDate }),
@@ -1179,7 +1395,7 @@ export const getAttendanceSummary = async (req, res) => {
     const completed = todayLogs.filter((l) => l.clockIn && l.clockOut).length;
     const active = todayLogs.filter((l) => l.clockIn && !l.clockOut).length;
     const onBreak = todayLogs.filter((l) => l.breaks?.some((b) => b.start && !b.end)).length;
-    const late = todayLogs.filter((l) => l.lateLogin === true).length; 
+    const late = todayLogs.filter((l) => l.lateLogin === true).length;
 
     return res.status(200).json({
       success: true,

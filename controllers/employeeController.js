@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import { createEmployeeSchema, employeeChangePasswordSchema, employeeLoginSchema, employeeUpdateRequestSchema, updateEmployeeByAdminSchema, updateEmployeeProfileSchema } from '../validations/employeeValidation.js';
+import { adminChangePasswordSchema, createEmployeeSchema, employeeChangePasswordSchema, employeeLoginSchema, employeeUpdateRequestSchema, updateEmployeeByAdminSchema, updateEmployeeProfileSchema } from '../validations/employeeValidation.js';
 import Employee from '../model/Employee.js';
 import BlacklistedToken from '../model/BlacklistedToken.js';
 import { deleteImageFromS3, uploadImageToS3 } from '../utils/saveOfferLetterInS3.js';
@@ -10,17 +10,19 @@ import NotificationService from '../services/notificationService.js';
 import EmployerUser from '../model/EmployerUser.js';
 import Notification from '../model/Notification.js';
 import { sendAppointmentEmail, sendMail } from '../utils/mailer.js';
-import { newEmployeeTemplate } from '../utils/emailTemplates.js';
+import { newEmployeeTemplate, passwordChangedByAdminTemplate } from '../utils/emailTemplates.js';
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 import { uploadFaceImage } from "../utils/faceUpload.js";
+import { getDisplayName } from '../utils/displayName.js';
+import { recordLogin, recordLogout } from "../utils/loginActivity.js";
 
 
 
 // ✅ must match the filename on disk exactly
-import { generateRelievingLetter }      from '../services/Relievingletterservice.js';
+import { generateRelievingLetter } from '../services/Relievingletterservice.js';
 import { generateExperienceCertificate } from '../services/Experiencecertificateservice.js';
-import { s3, S3_BUCKET } from '../config/s3.js';           // ← same import as saveAppointmentLetterInS3.js
+import { s3, S3_BUCKET, getS3ServerDate } from '../config/s3.js';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SendMailJet } from '../utils/mailer.js';         // ← your Mailjet sender
@@ -31,6 +33,16 @@ import {
 import { saveExperienceCertificateInS3 } from '../utils/Saveexperiencecertificateins3.js';
 import { saveRelievingLetterInS3 } from '../utils/Saverelievingletterins3.js';
 
+
+
+// add to employeeController.js — alongside the other imports at the top
+import { generateAppraisalLetter } from '../services/appraisalLetterService.js';
+import { saveAppraisalLetterInS3 } from '../utils/saveAppraisalLetterInS3.js';
+import { appraisalLetterEmailTemplate } from '../utils/emailTemplates.js';
+
+
+
+
 dotenv.config();
 
 
@@ -39,7 +51,11 @@ const getSignedS3Url = async (storedUrl) => {
         ? decodeURIComponent(storedUrl.split('.amazonaws.com/')[1].split('?')[0])
         : storedUrl;
     const cmd = new GetObjectCommand({ Bucket: S3_BUCKET, Key: key });
-    return getSignedUrl(s3, cmd, { expiresIn: 900 });
+
+    // 🔑 Sign with S3's clock, not the server's local clock
+    const signingDate = await getS3ServerDate();
+
+    return getSignedUrl(s3, cmd, { expiresIn: 900, signingDate });
 };
 
 
@@ -78,7 +94,7 @@ const ordinalDate = (date) => {
  * Builds the data object fed into PDF generators
  */
 const buildEmployeeData = (employee) => ({
-    fullName: `${employee.firstName} ${employee.lastName}`,
+    fullName: getDisplayName(employee),
     employeeId: employee.employeeId,
     designation: employee.designation || '—',
     department: employee.department || '—',
@@ -207,11 +223,11 @@ export const createEmployee = async (req, res) => {
         await employee.save();
 
         // Send welcome email
-        if (employee.personalEmail) {
+        if (employee.officialEmail) {
             setTimeout(async () => {
                 try {
                     await sendMail({
-                        to: employee.personalEmail,
+                        to: employee.officialEmail,
                         subject: `Welcome to ${process.env.COMPANY_NAME} - Employee Portal Access`,
                         html: newEmployeeTemplate(
                             employee,
@@ -329,6 +345,17 @@ export const employeeLogin = async (req, res) => {
 
         // await employee.save();
 
+        // Track this login session (for admin login-activity monitoring)
+        await recordLogin(req, {
+            userId: employee._id,
+            userModel: 'Employee',
+            role: employee.role,
+            name: `${employee.firstName} ${employee.lastName}`.trim(),
+            email: employee.officialEmail,
+            employeeId: employee.employeeId,
+            token,
+        });
+
         // Return employee without password
         const employeeResponse = employee.toJSON();
 
@@ -356,7 +383,7 @@ export const employeeLogin = async (req, res) => {
 // Get employee profile
 export const getEmployeeProfile = async (req, res) => {
     try {
-        const employee = await Employee.findById(req.user._id).select('-officialPassword -createdBy -annualSalary -isPermanentEmp');
+        const employee = await Employee.findById(req.user._id).select('-officialPassword -createdBy -isPermanentEmp');
 
         if (!employee) {
             return res.status(404).json({
@@ -412,7 +439,7 @@ export const updateEmployeeProfile = async (req, res) => {
         }
 
         // Check if trying to update restricted fields
-        const restrictedFields = ['employeeId', 'officialEmail', 'role', 'createdBy', 'designation', 'department', 'isActive','isPermanentEmp', 'annualSalary'];
+        const restrictedFields = ['employeeId', 'officialEmail', 'role', 'createdBy', 'designation', 'department', 'isActive', 'isPermanentEmp', 'annualSalary', 'salaryAccountDetails'];
         const restrictedUpdate = Object.keys(value).some(field => restrictedFields.includes(field));
 
         if (restrictedUpdate) {
@@ -503,23 +530,41 @@ export const updateEmployeeProfile = async (req, res) => {
     }
 };
 
-// Change employee password
+// Change employee password (ADMIN / HR only)
 export const changeEmployeePassword = async (req, res) => {
     try {
+        // Role check
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Only ADMIN or HR can change employee passwords'
+            });
+        }
+
+        const { id } = req.params;
+
+        // Validate ID
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid employee ID format'
+            });
+        }
+
         // Validate request body
-        const { error, value } = employeeChangePasswordSchema.validate(req.body);
+        const { error, value } = adminChangePasswordSchema.validate(req.body);
         if (error) {
             return res.status(400).json({
                 success: false,
                 message: 'Validation error',
-                errors: error.details.map(detail => detail.message)
+                errors: error.details.map(d => d.message)
             });
         }
 
-        const { currentPassword, newPassword } = value;
+        const { newPassword } = value;
 
-        // Get employee with password
-        const employee = await Employee.findById(req.user._id);
+        // Find employee
+        const employee = await Employee.findById(id);
         if (!employee) {
             return res.status(404).json({
                 success: false,
@@ -527,27 +572,47 @@ export const changeEmployeePassword = async (req, res) => {
             });
         }
 
-        // Verify current password
-        const isPasswordValid = await bcrypt.compare(currentPassword, employee.officialPassword);
-        if (!isPasswordValid) {
+        if (!employee.isActive) {
             return res.status(400).json({
                 success: false,
-                message: 'Current password is incorrect'
+                message: 'Cannot change password for a resigned/inactive employee'
             });
         }
 
         // Hash new password
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(newPassword, salt);
+        employee.officialPassword = await bcrypt.hash(newPassword, salt);
+        employee.lastUpdatedBy = req.user._id;
+        employee.lastUpdatedAt = new Date();
 
-        // Update password
-        employee.officialPassword = hashedPassword;
         await employee.save();
+
+        // Send notification email with the new plain password (non-blocking)
+        if (employee.officialEmail) {
+            setTimeout(async () => {
+                try {
+                    await sendMail({
+                        to: employee.officialEmail,
+                        subject: `Your ${process.env.COMPANY_NAME} password has been reset`,
+                        html: passwordChangedByAdminTemplate(employee, newPassword)
+                    });
+                } catch (mailErr) {
+                    console.error('Password-change email error:', mailErr.message);
+                }
+            }, 1500);
+        }
 
         return res.status(200).json({
             success: true,
-            message: 'Password changed successfully'
+            message: 'Password changed successfully. Email sent to employee.',
+            data: {
+                employeeId: employee.employeeId,
+                fullName: getDisplayName(employee),
+                officialEmail: employee.officialEmail,
+                newPassword // returned only here so HR can copy it — not stored anywhere
+            }
         });
+
     } catch (error) {
         console.error('Change employee password error:', error);
         return res.status(500).json({
@@ -580,6 +645,9 @@ export const employeeLogout = async (req, res) => {
             token,
             expiresAt: new Date(decoded.exp * 1000)
         });
+
+        // Close out this login session (for admin login-activity monitoring)
+        await recordLogout(token, decoded);
 
         return res.status(200).json({
             success: true,
@@ -715,7 +783,6 @@ export const getEmployeeById = async (req, res) => {
 // Update employee status (ADMIN/HR only)
 export const updateEmployeeStatus = async (req, res) => {
     try {
-        // Check if user has permission (ADMIN or HR)
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({
                 success: false,
@@ -733,7 +800,6 @@ export const updateEmployeeStatus = async (req, res) => {
             });
         }
 
-        // Validate ID format
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({
                 success: false,
@@ -749,14 +815,25 @@ export const updateEmployeeStatus = async (req, res) => {
             });
         }
 
-        // Update status
         employee.isActive = isActive;
         employee.updateRequested = false;
         employee.updateRequestReason = undefined;
         employee.lastUpdatedAt = new Date();
 
-        await employee.save();
+        // ── ID card auto-expiry on resignation / reset on reactivation ──
+        if (!isActive && employee.idCard?.status === 'active') {
+            employee.idCard.status = 'expired';
+            employee.idCard.expiredAt = new Date();
+        } else if (isActive && employee.idCard?.status === 'expired') {
+            // Reactivated employee — require HR to reissue a fresh card
+            employee.idCard.status = 'not_generated';
+            employee.idCard.idCardNumber = null;
+            employee.idCard.issuedAt = null;
+            employee.idCard.expiredAt = null;
+        }
+        // ──────────────────────────────────────────────────────────────
 
+        await employee.save();
 
         const employeeResponse = employee.toJSON();
 
@@ -1538,7 +1615,7 @@ export const sendAppointmentLetter = async (req, res) => {
         const formattedEmployee = {
             ...employee.toObject(),
             user: {
-                fullName: `${employee.firstName} ${employee.lastName}`,
+                fullName: getDisplayName(employee),
                 fullNameS3: `${employee.firstName}${employee.lastName}`,
             },
             joiningDate: employee.createdAt,
@@ -1564,14 +1641,19 @@ export const sendAppointmentLetter = async (req, res) => {
                 formattedEmployee.user.fullNameS3
             );
 
-            // ✅ Save as OBJECT (not array)
-            employee.appointmentLetters = {
+            const appointmentLetters = {
                 url: appointmentUrl,
                 fileName: `${formattedEmployee.user.fullNameS3}_AppointmentLetter_Kiaq.pdf`,
                 uploadedAt: new Date(),
             };
 
-            await employee.save();
+            // ✅ Use updateOne to avoid full schema validation
+            await Employee.updateOne(
+                { _id: employee._id },
+                { $set: { appointmentLetters } }
+            );
+
+            employee.appointmentLetters = appointmentLetters; // keep local ref in sync
 
         } catch (uploadError) {
             console.error("S3 Upload Error:", uploadError);
@@ -1658,87 +1740,305 @@ export const verifyAppointmentLetter = async (req, res) => {
 
 
 
+/**
+ * GET /api/employees/appraisals
+ * Returns only employees who have at least one appraisal on record
+ */
+export const getEmployeesWithAppraisals = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can view appraisals' });
+        }
+
+        const employees = await Employee.find({ 'appraisals.0': { $exists: true } })
+            .select('firstName lastName officialEmail employeeId designation department annualSalary appraisals isActive')
+            .sort({ updatedAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Employees with appraisals retrieved successfully',
+            data: { employees, total: employees.length },
+        });
+    } catch (error) {
+        console.error('Get employees with appraisals error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/employees/eligible-for-appraisal
+ * Returns ALL active employees (for the picker when HR clicks "Appraisals")
+ */
+export const getEmployeesForAppraisalSelection = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can view this list' });
+        }
+
+        const employees = await Employee.find({ isActive: true })
+            .select('firstName lastName officialEmail employeeId designation department annualSalary appraisals')
+            .sort({ firstName: 1 });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Employees retrieved successfully',
+            data: { employees, total: employees.length },
+        });
+    } catch (error) {
+        console.error('Get employees for appraisal selection error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * POST /api/employees/:id/send-appraisal-letter
+ * Body: { newAnnualSalary, percentageIncrement, effectiveDate, letterDate, refNo }
+ * Always pushes a NEW appraisal entry (array), generates a fresh PDF + annexure, uploads, emails.
+ */
+export const sendAppraisalLetter = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only ADMIN or HR can issue appraisal letters' });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+
+        const { newAnnualSalary, percentageIncrement, effectiveDate, letterDate, refNo } = req.body;
+
+        if (newAnnualSalary === undefined || percentageIncrement === undefined || !effectiveDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'newAnnualSalary, percentageIncrement and effectiveDate are required',
+            });
+        }
+
+        const employee = await Employee.findById(req.params.id);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: 'Employee not found' });
+        }
+
+        const previousAnnualSalary = employee.annualSalary || 0;
+
+        const empData = {
+            fullName: getDisplayName(employee),
+            employeeId: employee.employeeId,
+            designation: employee.designation,
+            department: employee.department,
+            previousAnnualSalary,
+            newAnnualSalary,
+            percentageIncrement,
+            effectiveDate,
+            letterDate: letterDate || new Date(),
+            refNo: refNo || `KIAQ/APR/${employee.employeeId}`,
+            hrName: process.env.HR_NAME || 'Hazeena Begum A',
+            hrTitle: process.env.HR_TITLE || 'SR Executive - Human Resource',
+        };
+
+        // 1. Generate PDF
+        const pdfBuffer = await generateAppraisalLetter(empData);
+
+        // 2. Upload to S3
+        const fullName = `${employee.firstName}${employee.lastName}`;
+        const url = await saveAppraisalLetterInS3(pdfBuffer, fullName);
+        const fileName = `${fullName}_AppraisalLetter_${Date.now()}_Kiaq.pdf`;
+
+        // 3. Check if effectiveDate is today or already past → apply salary immediately
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const effective = new Date(effectiveDate);
+        effective.setHours(0, 0, 0, 0);
+
+        const applyNow = effective <= today;
+
+        // 4. Build the appraisal record
+        const appraisalEntry = {
+            previousAnnualSalary,
+            newAnnualSalary,
+            percentageIncrement,
+            effectiveDate: new Date(effectiveDate),
+            letterDate: empData.letterDate,
+            refNo: empData.refNo,
+            designation: employee.designation,
+            department: employee.department,
+            url,
+            fileName,
+            sentAt: new Date(),
+            // true  → salary applied right now
+            // false → cron will apply it on effectiveDate at 00:05 IST
+            isEffective: applyNow,
+            generatedBy: { userId: req.user._id, userEmail: req.user.email },
+        };
+
+        // 5. Push appraisal entry; only update annualSalary if applyNow
+        await Employee.updateOne(
+            { _id: employee._id },
+            {
+                $push: { appraisals: appraisalEntry },
+                $set: {
+                    lastUpdatedAt: new Date(),
+                    lastUpdatedBy: req.user._id,
+                    ...(applyNow && { annualSalary: newAnnualSalary }),
+                },
+            }
+        );
+
+        console.log(
+            applyNow
+                ? `[Appraisal] Salary applied immediately for ${employee.employeeId} → ${newAnnualSalary}`
+                : `[Appraisal] Salary scheduled on ${effectiveDate} via cron for ${employee.employeeId}`
+        );
+
+        // 6. Send email
+        let emailSent = false;
+        try {
+            await SendMailJet({
+                to:  employee.officialEmail || employee.personalEmail,
+                subject: `Appraisal Letter – ${getDisplayName(employee)} | ${process.env.COMPANY_NAME}`,
+                html: appraisalLetterEmailTemplate(employee, appraisalEntry),
+                attachments: [{
+                    ContentType: 'application/pdf',
+                    Filename: fileName,
+                    Base64Content: pdfBuffer.toString('base64'),
+                }],
+            });
+            emailSent = true;
+        } catch (emailErr) {
+            console.error('Appraisal letter email error:', emailErr);
+        }
+
+        const updatedEmployee = await Employee.findById(employee._id).select('-officialPassword');
+
+        return res.status(200).json({
+            success: true,
+            message: `Appraisal letter sent successfully${emailSent ? ' with email' : ' (email failed)'}`,
+            data: {
+                appraisal: appraisalEntry,
+                employee: updatedEmployee,
+                emailSent,
+                salaryApplied: applyNow,
+            },
+        });
+    } catch (error) {
+        console.error('Send appraisal letter error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/employees/:id/preview-appraisal-letter/:appraisalId
+ * Returns 15-min signed URL for a specific appraisal letter
+ */
+export const previewAppraisalLetter = async (req, res) => {
+    try {
+        if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+        const { id, appraisalId } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
+        }
+
+        const employee = await Employee.findById(id);
+        if (!employee) {
+            return res.status(404).json({ success: false, message: 'Employee not found' });
+        }
+
+        const appraisal = employee.appraisals.id(appraisalId);
+        if (!appraisal?.url) {
+            return res.status(404).json({ success: false, message: 'Appraisal letter not found' });
+        }
+
+        const fileUrl = await getSignedS3Url(appraisal.url);
+        return res.status(200).json({ success: true, fileUrl });
+    } catch (error) {
+        console.error('Preview appraisal letter error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 // Register face
 // import { uploadFaceImage } from "../utils/uploadFaceImage.js";
 
 export const registerEmployeeFace = async (req, res) => {
-  try {
-    const { faceImage, faceDescriptor } = req.body;
+    try {
+        const { faceImage, faceDescriptor } = req.body;
 
-    if (!faceImage || !faceDescriptor) {
-      return res.status(400).json({
-        success: false,
-        message: "Image and face descriptor are required"
-      });
+        if (!faceImage || !faceDescriptor) {
+            return res.status(400).json({
+                success: false,
+                message: "Image and face descriptor are required"
+            });
+        }
+
+        const employee = await Employee.findById(req.user._id);
+
+        if (!employee) {
+            return res.status(404).json({
+                success: false,
+                message: "Employee not found"
+            });
+        }
+
+        const faceImageUrl = await uploadFaceImage(faceImage, "faces");
+
+        employee.faceImage = faceImageUrl;
+        employee.faceDescriptor = faceDescriptor;
+
+        await employee.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Face registered successfully",
+            data: {
+                faceImage: faceImageUrl,
+                faceDescriptor
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
-
-    const employee = await Employee.findById(req.user._id);
-
-    if (!employee) {
-      return res.status(404).json({
-        success: false,
-        message: "Employee not found"
-      });
-    }
-
-    const faceImageUrl = await uploadFaceImage(faceImage, "faces");
-
-    employee.faceImage = faceImageUrl;
-    employee.faceDescriptor = faceDescriptor;
-
-    await employee.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Face registered successfully",
-      data: {
-        faceImage: faceImageUrl,
-        faceDescriptor
-      }
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
 };
 
 // employeeController.js — fix getEmployeeFace to support employeeId param
 export const getEmployeeFace = async (req, res) => {
-  try {
-    const { employeeId } = req.params; // ← use param instead of req.user._id
+    try {
+        const { employeeId } = req.params; // ← use param instead of req.user._id
 
-    const employee = await Employee.findOne({ employeeId })
-      .select("faceImage faceDescriptor employeeId firstName lastName");
-      console.log(employee)
+        const employee = await Employee.findOne({ employeeId })
+            .select("faceImage faceDescriptor employeeId firstName lastName");
+        console.log(employee)
 
-    if (!employee || !employee.faceDescriptor) {
-      return res.status(404).json({
-        success: false,
-        message: "Face not registered"
-      });
+        if (!employee || !employee.faceDescriptor) {
+            return res.status(404).json({
+                success: false,
+                message: "Face not registered"
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                employeeId: employee.employeeId,
+                name: getDisplayName(employee),
+                faceDescriptor: employee.faceDescriptor,
+                faceImage: employee.faceImage,
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
-
-    res.status(200).json({
-      success: true,
-      data: {
-        employeeId: employee.employeeId,
-        name: employee.firstName + " " + employee.lastName,
-        faceDescriptor: employee.faceDescriptor,
-        faceImage: employee.faceImage,
-      }
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
 }
 // Get all employees without pagination (HR/Admin only) - minimal fields
 export const getAllEmployeesAppointment = async (req, res) => {
@@ -1812,7 +2112,7 @@ export const getResignedEmployees = async (req, res) => {
         }
 
         const employees = await Employee.find({ isActive: false })
-            .select('firstName lastName officialEmail employeeId designation department createdAt relievingDate resignationDate relievingLetter experienceCertificate isActive')
+            .select('firstName lastName officialEmail employeeId designation doj department createdAt relievingDate resignationDate relievingLetter experienceCertificate isActive')
             .sort({ updatedAt: -1 });
 
         return res.status(200).json({
@@ -1835,16 +2135,16 @@ export const sendRelievingLetter = async (req, res) => {
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Only ADMIN or HR can send relieving letters' });
         }
- 
+
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
         }
- 
+
         const employee = await Employee.findById(req.params.id);
         if (!employee) {
             return res.status(404).json({ success: false, message: 'Employee not found' });
         }
- 
+
         // Already sent — return existing record
         if (employee.relievingLetter?.url) {
             return res.status(200).json({
@@ -1853,46 +2153,50 @@ export const sendRelievingLetter = async (req, res) => {
                 data: { relievingLetter: employee.relievingLetter },
             });
         }
- 
+
         // ✅ Use manually entered form data from req.body
         //    Fall back to buildEmployeeData() only for fields not provided
         const fallback = buildEmployeeData(employee);
         const empData = {
-            fullName:        req.body.fullName        || fallback.fullName,
-            employeeId:      req.body.employeeId      || fallback.employeeId,
-            designation:     req.body.designation     || fallback.designation,
-            department:      req.body.department      || fallback.department,
-            joiningDate:     req.body.joiningDate     || fallback.joiningDate,
-            leavingDate:     req.body.leavingDate     || fallback.leavingDate,
+            fullName: req.body.fullName || fallback.fullName,
+            employeeId: req.body.employeeId || fallback.employeeId,
+            designation: req.body.designation || fallback.designation,
+            department: req.body.department || fallback.department,
+            joiningDate: req.body.joiningDate || fallback.joiningDate,
+            leavingDate: req.body.leavingDate || fallback.leavingDate,
             resignationDate: req.body.resignationDate || fallback.resignationDate,
-            letterDate:      req.body.letterDate      || fallback.letterDate,
-            refNo:           req.body.refNo           || fallback.refNo,
-            hrName:          req.body.hrName          || fallback.hrName,
-            hrTitle:         req.body.hrTitle         || fallback.hrTitle,
+            letterDate: req.body.letterDate || fallback.letterDate,
+            refNo: req.body.refNo || fallback.refNo,
+            hrName: req.body.hrName || fallback.hrName,
+            hrTitle: req.body.hrTitle || fallback.hrTitle,
         };
- 
+
         // 1. Generate PDF
         const pdfBuffer = await generateRelievingLetter(empData);
- 
+
         // 2. Upload to S3
         const fullName = `${employee.firstName}${employee.lastName}`;
-        const url      = await saveRelievingLetterInS3(pdfBuffer, fullName);
+        const url = await saveRelievingLetterInS3(pdfBuffer, fullName);
         const fileName = `${fullName}_RelievingLetter_Kiaq.pdf`;
- 
+
         // 3. Save to DB
+        // 3. Save to DB
+        await Employee.updateOne(
+            { _id: employee._id },
+            { $set: { relievingLetter: { url, fileName, sentAt: new Date() } } }
+        );
         employee.relievingLetter = { url, fileName, sentAt: new Date() };
-        await employee.save();
- 
+
         // 4. Send Mailjet email
         let emailSent = false;
         try {
             await SendMailJet({
-                to:      employee.personalEmail || employee.officialEmail,
-                subject: `Relieving Letter – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
-                html:    relievingLetterEmailTemplate(employee),
+                to: employee.personalEmail || employee.officialEmail,
+                subject: `Relieving Letter – ${getDisplayName(employee)} | ${process.env.COMPANY_NAME}`,
+                html: relievingLetterEmailTemplate(employee),
                 attachments: [{
-                    ContentType:   'application/pdf',
-                    Filename:      fileName,
+                    ContentType: 'application/pdf',
+                    Filename: fileName,
                     Base64Content: pdfBuffer.toString('base64'),
                 }],
             });
@@ -1900,7 +2204,7 @@ export const sendRelievingLetter = async (req, res) => {
         } catch (emailErr) {
             console.error('Relieving letter email error:', emailErr);
         }
- 
+
         return res.status(200).json({
             success: true,
             message: `Relieving letter sent successfully${emailSent ? ' with email' : ' (email failed)'}`,
@@ -1911,8 +2215,8 @@ export const sendRelievingLetter = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
- 
- 
+
+
 /**
  * POST /api/employees/:id/send-experience-certificate
  * Body: { fullName, employeeId, designation, department,
@@ -1923,16 +2227,16 @@ export const sendExperienceCertificate = async (req, res) => {
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Only ADMIN or HR can send experience certificates' });
         }
- 
+
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ success: false, message: 'Invalid employee ID format' });
         }
- 
+
         const employee = await Employee.findById(req.params.id);
         if (!employee) {
             return res.status(404).json({ success: false, message: 'Employee not found' });
         }
- 
+
         // Already sent — return existing record
         if (employee.experienceCertificate?.url) {
             return res.status(200).json({
@@ -1941,44 +2245,51 @@ export const sendExperienceCertificate = async (req, res) => {
                 data: { experienceCertificate: employee.experienceCertificate },
             });
         }
- 
+
         // ✅ Use manually entered form data from req.body
         const fallback = buildEmployeeData(employee);
         const empData = {
-            fullName:    req.body.fullName    || fallback.fullName,
-            employeeId:  req.body.employeeId  || fallback.employeeId,
+            fullName: req.body.fullName || fallback.fullName,
+            employeeId: req.body.employeeId || fallback.employeeId,
             designation: req.body.designation || fallback.designation,
-            department:  req.body.department  || fallback.department,
+            department: req.body.department || fallback.department,
             joiningDate: req.body.joiningDate || fallback.joiningDate,
             leavingDate: req.body.leavingDate || fallback.leavingDate,
-            letterDate:  req.body.letterDate  || fallback.letterDate,
-            refNo:       req.body.refNo       || fallback.refNo,
-            hrName:      req.body.hrName      || fallback.hrName,
-            hrTitle:     req.body.hrTitle     || fallback.hrTitle,
+            letterDate: req.body.letterDate || fallback.letterDate,
+            refNo: req.body.refNo || fallback.refNo,
+            hrName: req.body.hrName || fallback.hrName,
+            hrTitle: req.body.hrTitle || fallback.hrTitle,
         };
- 
+
         // 1. Generate PDF
         const pdfBuffer = await generateExperienceCertificate(empData);
- 
+
         // 2. Upload to S3
         const fullName = `${employee.firstName}${employee.lastName}`;
-        const url      = await saveExperienceCertificateInS3(pdfBuffer, fullName);
+        const url = await saveExperienceCertificateInS3(pdfBuffer, fullName);
         const fileName = `${fullName}_ExperienceCertificate_Kiaq.pdf`;
- 
+
         // 3. Save to DB
-        employee.experienceCertificate = { url, fileName, sentAt: new Date() };
-        await employee.save();
- 
+        // 3. Save to DB
+        const experienceCertificate = { url, fileName, sentAt: new Date() };
+
+        await Employee.updateOne(
+            { _id: employee._id },
+            { $set: { experienceCertificate } }
+        );
+
+        employee.experienceCertificate = experienceCertificate; // keep local ref in sync for response
+
         // 4. Send Mailjet email
         let emailSent = false;
         try {
             await SendMailJet({
-                to:      employee.personalEmail || employee.officialEmail,
-                subject: `Experience Certificate – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
-                html:    experienceCertificateEmailTemplate(employee),
+                to: employee.personalEmail || employee.officialEmail,
+                subject: `Experience Certificate – ${getDisplayName(employee)} | ${process.env.COMPANY_NAME}`,
+                html: experienceCertificateEmailTemplate(employee),
                 attachments: [{
-                    ContentType:   'application/pdf',
-                    Filename:      fileName,
+                    ContentType: 'application/pdf',
+                    Filename: fileName,
                     Base64Content: pdfBuffer.toString('base64'),
                 }],
             });
@@ -1986,7 +2297,7 @@ export const sendExperienceCertificate = async (req, res) => {
         } catch (emailErr) {
             console.error('Experience certificate email error:', emailErr);
         }
- 
+
         return res.status(200).json({
             success: true,
             message: `Experience certificate sent successfully${emailSent ? ' with email' : ' (email failed)'}`,
@@ -2058,46 +2369,46 @@ export const generateRelievingLetterDirect = async (req, res) => {
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Access denied' });
         }
- 
+
         const {
             fullName, employeeId, designation, department,
             joiningDate, leavingDate, resignationDate,
             letterDate, refNo, hrName, hrTitle,
             sendEmail = false, recipientEmail,
         } = req.body;
- 
+
         // Validate required fields
         const missing = ['fullName', 'employeeId', 'designation', 'department',
-                         'joiningDate', 'leavingDate', 'resignationDate',
-                         'letterDate', 'refNo'].filter(f => !req.body[f]);
+            'joiningDate', 'leavingDate', 'resignationDate',
+            'letterDate', 'refNo'].filter(f => !req.body[f]);
         if (missing.length) {
             return res.status(400).json({
                 success: false,
                 message: `Missing required fields: ${missing.join(', ')}`,
             });
         }
- 
+
         const empData = {
             fullName, employeeId, designation, department,
             joiningDate, leavingDate, resignationDate,
             letterDate, refNo,
-            hrName:  hrName  || process.env.HR_NAME  || 'Hazeena Begum A',
+            hrName: hrName || process.env.HR_NAME || 'Hazeena Begum A',
             hrTitle: hrTitle || process.env.HR_TITLE || 'SR Executive - Human Resource',
         };
- 
+
         const pdfBuffer = await generateRelievingLetter(empData);
-        const fileName  = `${fullName.replace(/\s+/g, '')}_RelievingLetter_Kiaq.pdf`;
- 
+        const fileName = `${fullName.replace(/\s+/g, '')}_RelievingLetter_Kiaq.pdf`;
+
         // Optional email
         if (sendEmail && recipientEmail) {
             try {
                 await SendMailJet({
-                    to:      recipientEmail,
+                    to: recipientEmail,
                     subject: `Relieving Letter – ${fullName} | ${process.env.COMPANY_NAME}`,
-                    html:    relievingLetterEmailTemplate({ firstName: fullName.split(' ')[0], lastName: '', ...empData }),
+                    html: relievingLetterEmailTemplate({ firstName: fullName.split(' ')[0], lastName: '', ...empData }),
                     attachments: [{
-                        ContentType:   'application/pdf',
-                        Filename:      fileName,
+                        ContentType: 'application/pdf',
+                        Filename: fileName,
                         Base64Content: pdfBuffer.toString('base64'),
                     }],
                 });
@@ -2105,20 +2416,20 @@ export const generateRelievingLetterDirect = async (req, res) => {
                 console.error('Direct relieving email error:', emailErr);
             }
         }
- 
+
         // Stream PDF back as download
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Length', pdfBuffer.length);
         return res.send(pdfBuffer);
- 
+
     } catch (error) {
         console.error('Generate relieving letter direct error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
- 
- 
+
+
 /**
  * POST /api/employees/generate-experience-certificate
  * Body: { fullName, employeeId, designation, department,
@@ -2132,44 +2443,44 @@ export const generateExperienceCertificateDirect = async (req, res) => {
         if (!['EMPLOYER_ADMIN', 'EMPLOYER_HR'].includes(req.user.role)) {
             return res.status(403).json({ success: false, message: 'Access denied' });
         }
- 
+
         const {
             fullName, employeeId, designation, department,
             joiningDate, leavingDate,
             letterDate, refNo, hrName, hrTitle,
             sendEmail = false, recipientEmail,
         } = req.body;
- 
+
         const missing = ['fullName', 'employeeId', 'designation', 'department',
-                         'joiningDate', 'leavingDate', 'letterDate', 'refNo'].filter(f => !req.body[f]);
+            'joiningDate', 'leavingDate', 'letterDate', 'refNo'].filter(f => !req.body[f]);
         if (missing.length) {
             return res.status(400).json({
                 success: false,
                 message: `Missing required fields: ${missing.join(', ')}`,
             });
         }
- 
+
         const empData = {
             fullName, employeeId, designation, department,
             joiningDate, leavingDate,
             letterDate, refNo,
-            hrName:  hrName  || process.env.HR_NAME  || 'Hazeena Begum A',
+            hrName: hrName || process.env.HR_NAME || 'Hazeena Begum A',
             hrTitle: hrTitle || process.env.HR_TITLE || 'SR Executive - Human Resource',
         };
- 
+
         const pdfBuffer = await generateExperienceCertificate(empData);
-        const fileName  = `${fullName.replace(/\s+/g, '')}_ExperienceCertificate_Kiaq.pdf`;
- 
+        const fileName = `${fullName.replace(/\s+/g, '')}_ExperienceCertificate_Kiaq.pdf`;
+
         // Optional email
         if (sendEmail && recipientEmail) {
             try {
                 await SendMailJet({
-                    to:      recipientEmail,
+                    to: recipientEmail,
                     subject: `Experience Certificate – ${fullName} | ${process.env.COMPANY_NAME}`,
-                    html:    experienceCertificateEmailTemplate({ firstName: fullName.split(' ')[0], lastName: '', ...empData }),
+                    html: experienceCertificateEmailTemplate({ firstName: fullName.split(' ')[0], lastName: '', ...empData }),
                     attachments: [{
-                        ContentType:   'application/pdf',
-                        Filename:      fileName,
+                        ContentType: 'application/pdf',
+                        Filename: fileName,
                         Base64Content: pdfBuffer.toString('base64'),
                     }],
                 });
@@ -2177,12 +2488,12 @@ export const generateExperienceCertificateDirect = async (req, res) => {
                 console.error('Direct experience email error:', emailErr);
             }
         }
- 
+
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Length', pdfBuffer.length);
         return res.send(pdfBuffer);
- 
+
     } catch (error) {
         console.error('Generate experience certificate direct error:', error);
         return res.status(500).json({ success: false, message: error.message });

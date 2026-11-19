@@ -40,15 +40,14 @@ const permissionSchema = new Schema({
         minlength: 10,
         maxlength: 300
     },
-    status: {
-        type: String,
-        enum: ['PENDING', 'APPROVED', 'REJECTED'],
-        default: 'PENDING'
-    },
+    status: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'], default: 'PENDING' },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser', default: null },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployerUser', default: null },
     approvedComments: { type: String, default: null },
     rejectedComments: { type: String, default: null },
+    cancelReason: { type: String, default: null, trim: true, maxlength: 500 },
+    cancelledAt: { type: Date, default: null },
+    cancelledByEmployee: { type: Boolean, default: false },
     approvedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
     appliedAt: { type: Date, default: Date.now }
