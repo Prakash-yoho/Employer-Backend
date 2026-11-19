@@ -17,6 +17,7 @@ export const REPORT_FIELD_GROUPS = [
       { key: "employeeId",   label: "Employee ID",        get: (e) => e.employeeId },
       { key: "name",         label: "Employee Name",      get: (e) => e.name },
       { key: "designation",  label: "Designation",        get: (e) => e.designation },
+      { key: "status",       label: "Slip Status",        get: (e) => e.status ?? (e.released ? "Released" : "Not Released") },
       { key: "joiningDate",  label: "Date of Joining",    get: (e) => e.joiningDate },
       { key: "department",   label: "Department",         get: (e) => e.department },
       { key: "location",     label: "Location",           get: (e) => e.location },
@@ -24,12 +25,35 @@ export const REPORT_FIELD_GROUPS = [
     ],
   },
   {
-    group: "Bank Details",
+    group: "Bank Details (Payment Account)",
     fields: [
       { key: "bankName",      label: "Bank Name",      get: (e) => e.bankName },
       { key: "accountNumber", label: "Account Number", get: (e) => e.accountNumber },
+      { key: "ifscCode",      label: "IFSC Code",      get: (e) => e.ifscCode },
+      { key: "branchName",    label: "Branch Name",    get: (e) => e.branchName },
+      { key: "nameInBankAccount", label: "Name In Bank Account", get: (e) => e.nameInBankAccount },
       { key: "pan",           label: "PAN",            get: (e) => e.pan },
       { key: "uanNo",         label: "UAN No",         get: (e) => e.uanNo },
+    ],
+  },
+  {
+    group: "Salary Account Details",
+    fields: [
+      { key: "salaryBankName",          label: "Salary A/c Bank Name",         get: (e) => e.salaryBankName },
+      { key: "salaryBranchName",        label: "Salary A/c Branch Name",       get: (e) => e.salaryBranchName },
+      { key: "salaryNameInBankAccount", label: "Salary A/c Name In Bank",      get: (e) => e.salaryNameInBankAccount },
+      { key: "salaryAccountNumber",     label: "Salary A/c Account Number",    get: (e) => e.salaryAccountNumber },
+      { key: "salaryIfscCode",          label: "Salary A/c IFSC Code",         get: (e) => e.salaryIfscCode },
+    ],
+  },
+  {
+    group: "Personal Bank Details",
+    fields: [
+      { key: "personalBankName",          label: "Personal Bank Name",         get: (e) => e.personalBankName },
+      { key: "personalBranchName",        label: "Personal Branch Name",       get: (e) => e.personalBranchName },
+      { key: "personalNameInBankAccount", label: "Personal Name In Bank",      get: (e) => e.personalNameInBankAccount },
+      { key: "personalAccountNumber",     label: "Personal Account Number",    get: (e) => e.personalAccountNumber },
+      { key: "personalIfscCode",          label: "Personal IFSC Code",         get: (e) => e.personalIfscCode },
     ],
   },
   {

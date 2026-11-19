@@ -620,7 +620,43 @@ const calcDurationMinutes = (start, end) => {
   return Math.floor(diffSeconds / 60);
 };
 
+// ─── Break status per configured break slot (for the HR attendance view) ───────
+// status: TAKEN (within allowed time) | VIOLATED (over allowed time) |
+//         NOT_TAKEN (day finished and the break was never taken) |
+//         PENDING   (today, still working — the break may still come)
+async function getBreakSlots() {
+  const doc = await BreakPolicy.findOne({ key: "default" }).lean();
+  const slots = doc?.slots?.length
+    ? doc.slots
+    : [
+        { type: "MORNING", label: "Morning Break", allowedMinutes: 15, isActive: true },
+        { type: "LUNCH",   label: "Lunch Break",   allowedMinutes: 60, isActive: true },
+        { type: "EVENING", label: "Evening Break", allowedMinutes: 15, isActive: true },
+      ];
+  return slots.filter((s) => s.isActive !== false);
+}
 
+const buildBreakStatus = (log, slots) => {
+  if (!log?.clockIn) return null; // absent / holiday — nothing to show
+  const pendingDay = log.date === getNow().date && !log.clockOut;
+  return slots.map((s) => {
+    const taken = (log.breaks ?? []).filter((b) => b.breakType === s.type);
+    if (taken.length === 0) {
+      return {
+        type: s.type, label: s.label || s.type, allowedMinutes: s.allowedMinutes,
+        status: pendingDay ? "PENDING" : "NOT_TAKEN",
+        takenMinutes: 0, overByMinutes: 0,
+      };
+    }
+    const violated = taken.some((b) => b.isBreakViolation);
+    const takenMinutes = taken.reduce((a, b) => a + (calcDurationMinutes(b.start, b.end) || 0), 0);
+    const overByMinutes = taken.reduce((a, b) => a + (b.overByMinutes || 0), 0);
+    return {
+      type: s.type, label: s.label || s.type, allowedMinutes: s.allowedMinutes,
+      status: violated ? "VIOLATED" : "TAKEN", takenMinutes, overByMinutes,
+    };
+  });
+};
 
 
 // ─── Shared per-employee calendar builder ─────────────────────────────────────
@@ -629,6 +665,7 @@ const buildEmployeeCalendarRange = async ({
   employeeId, startDate, endDate, timing, todayStr, computeViolations,
 }) => {
   const capEnd = endDate > todayStr ? todayStr : endDate;
+  const breakSlots = await getBreakSlots();
 
   const years = [
     ...new Set([
@@ -681,6 +718,7 @@ const buildEmployeeCalendarRange = async ({
           duration: calcDurationMinutes(b.start, b.end),
         })),
         totalBreaks: log.breaks.length,
+        breakStatus: buildBreakStatus(log, breakSlots),
         workDurationMinutes: workMinutes,
         breakDurationMinutes: breakMinutes,
         netWorkMinutes: workMinutes != null ? workMinutes - breakMinutes : null,
@@ -746,6 +784,7 @@ const buildEmployeeCalendarRange = async ({
 // Returns paginated list of all employees with their latest attendance summary
 export const getAllEmployeesAttendance = async (req, res) => {
   try {
+    const breakSlots = await getBreakSlots();
     const { page = 1, limit = 10, date, search, status } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const targetDate = date || getNow().date;
@@ -901,8 +940,12 @@ export const getAllEmployeesAttendance = async (req, res) => {
       clockIn: emp.clockIn,
       clockOut: emp.clockOut,
       status: emp.attendanceStatus,
-      totalBreaks: emp.totalBreaks,
-      hasActiveBreak: emp.hasActiveBreak,
+      totalBreaks: emp.breaks?.length ?? 0,
+      hasActiveBreak: (emp.breaks ?? []).some((b) => b.start && !b.end),
+      breakStatus: buildBreakStatus(
+        { date: targetDate, clockIn: emp.clockIn, clockOut: emp.clockOut, breaks: emp.breaks },
+        breakSlots,
+      ),
       totalDays: 0,
       presentDays: 0,
     }));
@@ -929,6 +972,7 @@ export const getAllEmployeesAttendance = async (req, res) => {
 // Returns paginated attendance logs for a specific employee
 export const getEmployeeAttendanceLogs = async (req, res) => {
   try {
+    const breakSlots = await getBreakSlots();
     const { employeeId } = req.params;
     const { page = 1, limit = 20, month, year, startDate, endDate } = req.query;
 
@@ -1071,6 +1115,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
               duration: calcDurationMinutes(b.start, b.end),
             })),
             totalBreaks: log.breaks.length,
+            breakStatus: buildBreakStatus(log, breakSlots),
             workDurationMinutes: workMinutes,
             breakDurationMinutes: totalBreakMinutes,
             netWorkMinutes:
@@ -1232,6 +1277,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
           duration: calcDurationMinutes(b.start, b.end),
         })),
         totalBreaks: log.breaks.length,
+        breakStatus: buildBreakStatus(log, breakSlots),
         workDurationMinutes: workMinutes,
         breakDurationMinutes: totalBreakMinutes,
         netWorkMinutes:

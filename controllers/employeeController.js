@@ -14,6 +14,7 @@ import { newEmployeeTemplate, passwordChangedByAdminTemplate } from '../utils/em
 import { generateAppointmentLetter } from '../services/appointmentLetterService.js';
 import { saveAppointmentLetterInS3 } from '../utils/saveAppointmentLetterInS3.js';
 import { uploadFaceImage } from "../utils/faceUpload.js";
+import { getDisplayName } from '../utils/displayName.js';
 import { recordLogin, recordLogout } from "../utils/loginActivity.js";
 
 
@@ -93,7 +94,7 @@ const ordinalDate = (date) => {
  * Builds the data object fed into PDF generators
  */
 const buildEmployeeData = (employee) => ({
-    fullName: `${employee.firstName} ${employee.lastName}`,
+    fullName: getDisplayName(employee),
     employeeId: employee.employeeId,
     designation: employee.designation || '—',
     department: employee.department || '—',
@@ -438,7 +439,7 @@ export const updateEmployeeProfile = async (req, res) => {
         }
 
         // Check if trying to update restricted fields
-        const restrictedFields = ['employeeId', 'officialEmail', 'role', 'createdBy', 'designation', 'department', 'isActive', 'isPermanentEmp', 'annualSalary'];
+        const restrictedFields = ['employeeId', 'officialEmail', 'role', 'createdBy', 'designation', 'department', 'isActive', 'isPermanentEmp', 'annualSalary', 'salaryAccountDetails'];
         const restrictedUpdate = Object.keys(value).some(field => restrictedFields.includes(field));
 
         if (restrictedUpdate) {
@@ -606,7 +607,7 @@ export const changeEmployeePassword = async (req, res) => {
             message: 'Password changed successfully. Email sent to employee.',
             data: {
                 employeeId: employee.employeeId,
-                fullName: `${employee.firstName} ${employee.lastName}`,
+                fullName: getDisplayName(employee),
                 officialEmail: employee.officialEmail,
                 newPassword // returned only here so HR can copy it — not stored anywhere
             }
@@ -1614,7 +1615,7 @@ export const sendAppointmentLetter = async (req, res) => {
         const formattedEmployee = {
             ...employee.toObject(),
             user: {
-                fullName: `${employee.firstName} ${employee.lastName}`,
+                fullName: getDisplayName(employee),
                 fullNameS3: `${employee.firstName}${employee.lastName}`,
             },
             joiningDate: employee.createdAt,
@@ -1821,7 +1822,7 @@ export const sendAppraisalLetter = async (req, res) => {
         const previousAnnualSalary = employee.annualSalary || 0;
 
         const empData = {
-            fullName: `${employee.firstName} ${employee.lastName}`,
+            fullName: getDisplayName(employee),
             employeeId: employee.employeeId,
             designation: employee.designation,
             department: employee.department,
@@ -1895,7 +1896,7 @@ export const sendAppraisalLetter = async (req, res) => {
         try {
             await SendMailJet({
                 to:  employee.officialEmail || employee.personalEmail,
-                subject: `Appraisal Letter – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
+                subject: `Appraisal Letter – ${getDisplayName(employee)} | ${process.env.COMPANY_NAME}`,
                 html: appraisalLetterEmailTemplate(employee, appraisalEntry),
                 attachments: [{
                     ContentType: 'application/pdf',
@@ -2026,7 +2027,7 @@ export const getEmployeeFace = async (req, res) => {
             success: true,
             data: {
                 employeeId: employee.employeeId,
-                name: employee.firstName + " " + employee.lastName,
+                name: getDisplayName(employee),
                 faceDescriptor: employee.faceDescriptor,
                 faceImage: employee.faceImage,
             }
@@ -2191,7 +2192,7 @@ export const sendRelievingLetter = async (req, res) => {
         try {
             await SendMailJet({
                 to: employee.personalEmail || employee.officialEmail,
-                subject: `Relieving Letter – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
+                subject: `Relieving Letter – ${getDisplayName(employee)} | ${process.env.COMPANY_NAME}`,
                 html: relievingLetterEmailTemplate(employee),
                 attachments: [{
                     ContentType: 'application/pdf',
@@ -2284,7 +2285,7 @@ export const sendExperienceCertificate = async (req, res) => {
         try {
             await SendMailJet({
                 to: employee.personalEmail || employee.officialEmail,
-                subject: `Experience Certificate – ${employee.firstName} ${employee.lastName} | ${process.env.COMPANY_NAME}`,
+                subject: `Experience Certificate – ${getDisplayName(employee)} | ${process.env.COMPANY_NAME}`,
                 html: experienceCertificateEmailTemplate(employee),
                 attachments: [{
                     ContentType: 'application/pdf',

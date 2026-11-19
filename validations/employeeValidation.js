@@ -21,13 +21,13 @@ export const createEmployeeSchema = Joi.object({
         }),
 
     lastName: Joi.string()
-        .min(2)
+        .min(1)
         .max(50)
         .required()
         .trim()
         .messages({
             'string.empty': 'Last name is required',
-            'string.min': 'Last name must be at least 2 characters',
+            'string.min': 'Last name must be at least 1 character',
             'string.max': 'Last name cannot exceed 50 characters'
         }),
 
@@ -125,11 +125,11 @@ export const updateEmployeeProfileSchema = Joi.object({
         }),
 
     lastName: Joi.string()
-        .min(2)
+        .min(1)
         .max(50)
         .trim()
         .messages({
-            'string.min': 'Last name must be at least 2 characters',
+            'string.min': 'Last name must be at least 1 character',
             'string.max': 'Last name cannot exceed 50 characters'
         }),
 
@@ -215,6 +215,16 @@ export const updateEmployeeProfileSchema = Joi.object({
         .pattern(/^\d{12}$/)
         .messages({
             'string.pattern.base': 'Invalid Aadhaar number'
+        }),
+
+    nameAsPerAadhaar: Joi.string()
+        .trim()
+        .max(100)
+        .pattern(/^[A-Za-z][A-Za-z .'-]*$/)
+        .allow('')
+        .messages({
+            'string.pattern.base': 'Name as per Aadhaar can contain only letters, spaces, dots, hyphens and apostrophes',
+            'string.max': 'Name as per Aadhaar cannot exceed 100 characters'
         }),
 
     // annualSalary: Joi.number()
@@ -565,6 +575,16 @@ export const updateEmployeeProfileSchema = Joi.object({
         accountNumber: Joi.string()
             .trim(),
 
+        branchName: Joi.string()
+            .trim()
+            .max(100)
+            .allow(''),
+
+        nameInBankAccount: Joi.string()
+            .trim()
+            .max(100)
+            .allow(''),
+
         ifscCode: Joi.string()
             .pattern(/^[A-Z]{4}0[A-Z0-9]{6}$/)
             .messages({
@@ -660,11 +680,11 @@ export const updateEmployeeByAdminSchema = Joi.object({
         }),
 
     lastName: Joi.string()
-        .min(2)
+        .min(1)
         .max(50)
         .trim()
         .messages({
-            'string.min': 'Last name must be at least 2 characters',
+            'string.min': 'Last name must be at least 1 character',
             'string.max': 'Last name cannot exceed 50 characters'
         }),
 
@@ -710,6 +730,13 @@ export const updateEmployeeByAdminSchema = Joi.object({
         .messages({
             "boolean.base": "isPermanentEmp must be a boolean",
         }),
+
+    // Department / designation / employment type (HR/Admin only)
+    department: Joi.string().trim().messages({ 'string.empty': 'Department cannot be empty' }),
+    designation: Joi.string().trim().messages({ 'string.empty': 'Designation cannot be empty' }),
+    employmentType: Joi.string().valid('Fresher', 'Experienced').messages({
+        'any.only': 'Employment type must be either Fresher or Experienced'
+    }),
 
     spouseName: Joi.string()
         .trim(),
@@ -771,6 +798,16 @@ export const updateEmployeeByAdminSchema = Joi.object({
         .pattern(/^\d{12}$/)
         .messages({
             'string.pattern.base': 'Invalid Aadhaar number'
+        }),
+
+    nameAsPerAadhaar: Joi.string()
+        .trim()
+        .max(100)
+        .pattern(/^[A-Za-z][A-Za-z .'-]*$/)
+        .allow('')
+        .messages({
+            'string.pattern.base': 'Name as per Aadhaar can contain only letters, spaces, dots, hyphens and apostrophes',
+            'string.max': 'Name as per Aadhaar cannot exceed 100 characters'
         }),
 
     panNumber: Joi.string()
@@ -1102,6 +1139,16 @@ export const updateEmployeeByAdminSchema = Joi.object({
         accountNumber: Joi.string()
             .trim(),
 
+        branchName: Joi.string()
+            .trim()
+            .max(100)
+            .allow(''),
+
+        nameInBankAccount: Joi.string()
+            .trim()
+            .max(100)
+            .allow(''),
+
         ifscCode: Joi.string()
             .pattern(/^[A-Z]{4}0[A-Z0-9]{6}$/)
             .messages({
@@ -1112,6 +1159,18 @@ export const updateEmployeeByAdminSchema = Joi.object({
 
         uanNumber: Joi.string()
             .trim()
+    }),
+
+    // Salary account details (HR/Admin only — NOT in the employee self-update schema)
+    salaryAccountDetails: Joi.object({
+        bankName: Joi.string().trim().allow(''),
+        accountNumber: Joi.string().trim().allow(''),
+        branchName: Joi.string().trim().max(100).allow(''),
+        nameInBankAccount: Joi.string().trim().max(100).allow(''),
+        ifscCode: Joi.string()
+            .pattern(/^[A-Z]{4}0[A-Z0-9]{6}$/)
+            .allow('')
+            .messages({ 'string.pattern.base': 'Invalid IFSC code' })
     }),
 
     // Additional fields for HR/Admin

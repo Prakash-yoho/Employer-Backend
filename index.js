@@ -1,5 +1,7 @@
 import './config/auditPlugin.js' // ⬅ must be FIRST: registers global createdBy/updatedBy audit plugin before models compile
+import './config/auditTrailPlugin.js' // ⬅ must be SECOND: records field-level changes for the Admin audit log
 import { auditContextMiddleware } from './config/auditContext.js'
+import { auditLogMiddleware } from './middleware/auditLogMiddleware.js'
 import express from 'express'
 import dotenv from 'dotenv'
 import { connectDB } from './config/db.js'
@@ -31,6 +33,7 @@ import breakPolicyRoutes from "./routes/breakPolicyRoutes.js"
 import Violationgracepolicyroutes from "./routes/Violationgracepolicyroutes.js"
 import announcementRoutes from './routes/announcementRoutes.js'
 import payrollRoutes from "./routes/payrollRoutes.js";
+import auditLogRoutes from './routes/auditLogRoutes.js'
 import "./cron/midnightSweep.js";
 import { syncTrueTime } from './utils/trueTime.js';
 import { getTimeStatus } from './utils/trueTime.js';
@@ -66,6 +69,8 @@ app.use(express.json({ limit: '10mb' }));
 
 // Audit context — lets mongoose know which HR/Admin performed each action
 app.use(auditContextMiddleware);
+// Admin audit log — records every HR / IT / Project-Manager action as one readable log row
+app.use(auditLogMiddleware);
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use("/public", express.static("public"));
@@ -98,6 +103,7 @@ app.use("/api/projects", projectRoutes)
 app.use("/api/announcements", announcementRoutes)
 app.use("/api/salaryviolations", Violationgracepolicyroutes);
 app.use("/api/payslips", payrollRoutes);
+app.use("/api/audit-logs", auditLogRoutes); // Admin only
 
 // ─── CRON JOBS ────────────────────────────────────────────────────────────────
 

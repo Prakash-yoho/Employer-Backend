@@ -255,7 +255,7 @@ export const generateSalaryViolationReport = (payload) => {
         // Not marked attendance
         if (d.isNotMarked) {
           doc.text(
-            `• Not marked — no attendance recorded and no approved leave for this working day (salary deduction of 2 days).`,
+            `• Not marked — no attendance recorded and no approved leave for this working day (salary deduction of ${gracePolicy.notMarkedDeductionDays ?? 2} ${Number(gracePolicy.notMarkedDeductionDays ?? 2) === 1 ? 'day' : 'days'}).`,
             leftMargin + 8, currentY, { width: contentWidth - 8, align: 'left' }
           );
           currentY = doc.y + 3;

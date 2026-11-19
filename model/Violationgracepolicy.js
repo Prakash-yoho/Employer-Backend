@@ -31,6 +31,14 @@ const violationGracePolicySchema = new mongoose.Schema(
     // Per-break-type grace (extra minutes over each break's allowedMinutes)
     breakGrace: { type: breakGraceSchema, default: () => ({}) },
 
+    // Salary days deducted for EACH violation (late / early logout / break /
+    // missed clock-out). HR-configurable. Default 0.5 = previous fixed behaviour.
+    violationDayCost: { type: Number, default: 0.5, min: 0, max: 10 },
+
+    // Salary days deducted for each "not marked" day (no attendance and no
+    // approved leave). HR-configurable. Default 2 = previous fixed behaviour.
+    notMarkedDeductionDays: { type: Number, default: 2, min: 0, max: 10 },
+
     updatedBy: { type: String, default: null },
   },
   { timestamps: true }

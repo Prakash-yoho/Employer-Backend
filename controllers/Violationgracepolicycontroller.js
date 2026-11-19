@@ -151,6 +151,8 @@ export async function computeSalaryViolations(opts = {}) {
   ]);
 
   const { loginGraceMinutes, logoutGraceMinutes, breakGrace } = gracePolicy;
+  const violationDayCost       = gracePolicy.violationDayCost       ?? 0.5;
+  const notMarkedDeductionDays = gracePolicy.notMarkedDeductionDays ?? 2;
   const bg = {
     MORNING: breakGrace?.MORNING ?? 0,
     LUNCH:   breakGrace?.LUNCH   ?? 0,
@@ -373,7 +375,7 @@ export async function computeSalaryViolations(opts = {}) {
       endTime:      officeTiming.endTime,
       graceMinutes: officeTiming.graceMinutes,
     },
-    gracePolicy: { loginGraceMinutes, logoutGraceMinutes, breakGrace: bg },
+    gracePolicy: { loginGraceMinutes, logoutGraceMinutes, breakGrace: bg, violationDayCost, notMarkedDeductionDays },
     startDay,
   };
 }
@@ -406,7 +408,7 @@ export const getViolationGracePolicy = async (req, res) => {
 // Body: { loginGraceMinutes, logoutGraceMinutes, breakGrace: { MORNING, LUNCH, EVENING } }
 export const updateViolationGracePolicy = async (req, res) => {
   try {
-    const { loginGraceMinutes, logoutGraceMinutes, breakGrace } = req.body;
+    const { loginGraceMinutes, logoutGraceMinutes, breakGrace, violationDayCost, notMarkedDeductionDays } = req.body;
     const updatedBy = req.user?.employeeId ?? null;
 
     const update = {};
@@ -420,6 +422,19 @@ export const updateViolationGracePolicy = async (req, res) => {
         EVENING: Number(breakGrace.EVENING ?? 0),
       };
     }
+    // Deduction days — must be a number between 0 and 10
+    const dayField = (name, value) => {
+      if (value === undefined) return null;
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0 || n > 10) return `${name} must be a number between 0 and 10`;
+      update[name] = Math.round(n * 100) / 100;
+      return null;
+    };
+    const dayErr =
+      dayField("violationDayCost", violationDayCost) ||
+      dayField("notMarkedDeductionDays", notMarkedDeductionDays);
+    if (dayErr) return res.status(400).json({ success: false, message: dayErr });
+
     if (updatedBy) update.updatedBy = updatedBy;
 
     const doc = await ViolationGracePolicy.findOneAndUpdate(

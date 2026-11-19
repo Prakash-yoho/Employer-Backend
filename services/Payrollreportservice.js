@@ -4,7 +4,7 @@ import PDFDocument from "pdfkit";
 import fs from "fs";
 import path from "path";
 import dayjs from "dayjs";
-import { resolveFields } from "../utils/payrollReportFields.js";
+import { resolveFields } from "../utils/Payrollreportfields.js";
 
 const BRAND = "002B38";
 

@@ -144,6 +144,14 @@ const bankDetailsSchema = new Schema({
     accountNumber: {
         type: String,
     },
+    branchName: {
+        type: String,
+        trim: true,
+    },
+    nameInBankAccount: {
+        type: String,
+        trim: true,
+    },
     ifscCode: {
         type: String,
         match: [/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC code"]
@@ -153,6 +161,19 @@ const bankDetailsSchema = new Schema({
         default: true
     },
     uanNumber: String
+}, { _id: false });
+
+// Schema for Salary Account Details — the account where salary is credited.
+// Same shape as the personal bank details but editable by HR/Admin ONLY.
+const salaryAccountSchema = new Schema({
+    bankName: { type: String, trim: true },
+    accountNumber: { type: String, trim: true },
+    branchName: { type: String, trim: true },
+    nameInBankAccount: { type: String, trim: true },
+    ifscCode: {
+        type: String,
+        match: [/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC code"]
+    }
 }, { _id: false });
 
 // Schema for Emergency Contact
@@ -216,6 +237,12 @@ const employeeSchema = new Schema({
         type: String,
         required: true,
         trim: true
+    },
+    // Name exactly as printed on the Aadhaar card. When empty, the app falls
+    // back to "firstName lastName" everywhere a name is displayed.
+    nameAsPerAadhaar: {
+        type: String,
+        trim: true,
     },
 
     faceImage: {
@@ -382,6 +409,9 @@ const employeeSchema = new Schema({
 
     // SECTION 6: BANK DETAILS
     bankDetails: bankDetailsSchema,
+
+    // Salary account (HR/Admin only) — payroll uses this when filled, else personal bank details
+    salaryAccountDetails: salaryAccountSchema,
 
     department: {
         type: String,

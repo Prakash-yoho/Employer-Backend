@@ -43,8 +43,8 @@ export function calculateSalaryFromCTC(ctcMonthly) {
  *   workedDays = STANDARD_DAYS − lopDays − violationDayCost
  *
  *   violationDayCost:
- *     NOT_MARKED      → 1.0 day each
- *     all other types → 0.5 day each
+ *     NOT_MARKED      → notMarkedDayCost days each   (HR setting, default 2)
+ *     all other types → perViolationDayCost days each (HR setting, default 0.5)
  *
  * Pay is prorated on worked days:
  *   perDay  = totalEarnings / STANDARD_DAYS
@@ -64,12 +64,12 @@ export function computeWorkedDaysAndPay({
   extraViolationDayCost = 0,
   standardDays = 30,
   manualWorkedDays = null,
+  // HR-configurable day-cost weights (ViolationGracePolicy). Defaults keep the
+  // original behaviour: not-marked = 2 days, every other violation = 0.5 day.
+  notMarkedDayCost = 2,
+  perViolationDayCost = 0.5,
 }) {
-  // Day-cost weights per violation type:
-  //   NOT_MARKED      → 2 full days each
-  //   other violations→ 0.5 day each (late/early/break/missed-clockout)
-  const NOT_MARKED_DAY_COST = 2;
-  const violationDayCost = notMarkedDays * NOT_MARKED_DAY_COST + otherViolationCount * 0.5 + extraViolationDayCost;
+  const violationDayCost = notMarkedDays * notMarkedDayCost + otherViolationCount * perViolationDayCost + extraViolationDayCost;
 
   let workedDays;
   if (manualWorkedDays != null) {

@@ -1,3 +1,4 @@
+import { getDisplayName } from './displayName.js';
 export const newAdminUserTemplate = (adminUser, plainPassword, role) => {
   const roleDisplay =
     role === 'EMPLOYER_HR' ? 'HR' :
@@ -302,7 +303,7 @@ export const newEmployeeTemplate = (employee, officialPassword) => {
 
     <div class="content">
       <p>
-        Dear ${employee.firstName} ${employee.lastName},
+        Dear ${getDisplayName(employee)},
       </p>
 
       <p>
@@ -313,7 +314,7 @@ export const newEmployeeTemplate = (employee, officialPassword) => {
       <div class="section">
         <div class="section-title">Employee Details</div>
         <div class="details">
-          <div><strong>Name:</strong> ${employee.firstName} ${employee.lastName}</div>
+          <div><strong>Name:</strong> ${getDisplayName(employee)}</div>
           <div><strong>Employee ID:</strong> ${employee.employeeId}</div>
           <div><strong>Department:</strong> ${employee.department}</div>
           <div><strong>Designation:</strong> ${employee.designation}</div>
@@ -407,7 +408,7 @@ export const appointmentLetterEmailTemplate = (employee) => {
   <body>
       <div class="container">
 
-          <p>Dear <strong>${employee.firstName} ${employee.lastName}</strong>,</p>
+          <p>Dear <strong>${getDisplayName(employee)}</strong>,</p>
 
           <p>We are delighted to officially welcome you to <strong>${process.env.COMPANY_NAME}</strong>.</p>
 
@@ -467,7 +468,7 @@ export const relievingLetterEmailTemplate = (employee) => {
 </head>
 <body>
     <div class="container">
-        <p class="greeting">Dear ${employee.firstName} ${employee.lastName},</p>
+        <p class="greeting">Dear ${getDisplayName(employee)},</p>
 
         <p>
             This is to confirm that your resignation has been accepted, and you have been formally relieved 
@@ -479,7 +480,7 @@ export const relievingLetterEmailTemplate = (employee) => {
         </p>
 
         <div class="highlight">
-            <p><strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}</p>
+            <p><strong>Employee Name:</strong> ${getDisplayName(employee)}</p>
             <p><strong>Employee ID:</strong> ${employee.employeeId}</p>
             <p><strong>Designation:</strong> ${employee.designation || '—'}</p>
             <p><strong>Department:</strong> ${employee.department || '—'}</p>
@@ -537,13 +538,13 @@ export const experienceCertificateEmailTemplate = (employee) => {
         </div>
         <div class="orange-line"></div>
         <div class="body">
-            <div class="greeting">Dear ${employee.firstName} ${employee.lastName},</div>
+            <div class="greeting">Dear ${getDisplayName(employee)},</div>
             <p>
                 We are pleased to issue your <strong>Experience Certificate</strong> from
                 <strong>Kiaq Technologies Private Limited</strong>. Please find the document attached.
             </p>
             <div class="highlight">
-                <strong>Employee Name:</strong> ${employee.firstName} ${employee.lastName}<br/>
+                <strong>Employee Name:</strong> ${getDisplayName(employee)}<br/>
                 <strong>Employee ID:</strong> ${employee.employeeId}<br/>
                 <strong>Designation:</strong> ${employee.designation || '—'}<br/>
                 <strong>Department:</strong> ${employee.department || '—'}
@@ -1045,7 +1046,7 @@ export const passwordChangedByAdminTemplate = (employee, newPassword) => {
     <p>Your account password has been updated.</p>
 
     <p>
-      This is to inform you that <strong>${employee.firstName} ${employee.lastName}</strong>
+      This is to inform you that <strong>${getDisplayName(employee)}</strong>
       (<strong>${employee.employeeId}</strong>), your account password for the
       <strong>${companyName}</strong> Employee Portal has been reset by HR / Admin.
       Please use the new credentials below to log in.
@@ -1160,7 +1161,7 @@ export const appraisalLetterEmailTemplate = (employee, appraisal) => {
 
             <div class="subject">Letter of Salary Revision</div>
 
-            <p>Dear <strong>${employee.firstName} ${employee.lastName},</strong></p>
+            <p>Dear <strong>${getDisplayName(employee)},</strong></p>
 
             <p>
                 We are pleased to inform you that, in recognition of your performance and valuable

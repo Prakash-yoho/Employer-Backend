@@ -12,6 +12,7 @@ import {
   setManualWorkedDays,
   addManualViolation,
   removeManualViolation,
+  bulkUpdateManualEntries,
   downloadPayslip,
   getMySlip,
   getMyReleasedMonths,
@@ -36,6 +37,7 @@ router.post("/payroll/unrelease", authenticate, authorize(["EMPLOYER_HR", "EMPLO
 router.post("/payroll/publish", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), publishPayroll);
 router.post("/payroll/unpublish", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), unpublishPayroll);
 router.put("/payroll/manual-days", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), setManualWorkedDays);
+router.post("/payroll/manual-bulk", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), bulkUpdateManualEntries);
 router.post("/payroll/manual-violation", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), addManualViolation);
 router.delete("/payroll/manual-violation", authenticate, authorize(["EMPLOYER_HR", "EMPLOYER_ADMIN"]), removeManualViolation);
 // POST alias for remove (use when your HTTP client can't send a DELETE body/query reliably)

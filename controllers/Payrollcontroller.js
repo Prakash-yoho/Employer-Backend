@@ -3,6 +3,8 @@ import Leave from "../model/Leave.js";
 import PayrollRelease from "../model/Payrollrelease.js";
 import PayslipHistory from "../model/Paysliphistory.js";
 import { computeSalaryViolations } from "./Violationgracepolicycontroller.js";
+import { computeCycleWindow, getSalaryCycleStartDay } from "../utils/Salarycyclehelper.js";
+import { getDisplayName } from "../utils/displayName.js";
 import { calculateSalaryFromCTC, computeWorkedDaysAndPay } from "../utils/Salarycalc.js";
 import { generatePayslip } from "../services/Payslipservice.js";
 import { generateSalaryViolationReport } from "../services/Salaryviolationreportservice.js";
@@ -137,6 +139,36 @@ async function getLopDaysForWindowBulk(employeeIds, windowStart, windowEnd) {
 }
 
 /**
+ * Filter for "employees who belong to the payroll of a cycle":
+ * active employees whose date of joining is on/before the cycle END date.
+ * e.g. Sep payroll (16 Aug – 15 Sep) → only DOJ <= 15 Sep.
+ *      Oct payroll (16 Sep – 15 Oct) → only DOJ <= 15 Oct.
+ * Employees with no DOJ on record are kept (legacy data).
+ */
+function joinedByCycleEndFilter(windowEndStr) {
+  const cutoff = new Date(`${windowEndStr}T23:59:59.999Z`);
+  return {
+    isActive: true,
+    $or: [{ doj: { $lte: cutoff } }, { doj: null }, { doj: { $exists: false } }],
+  };
+}
+
+/** Resolve the cycle END date ("YYYY-MM-DD") for a payroll month ("YYYY-MM"). */
+async function getCycleEndForMonth(month) {
+  const startDay = await getSalaryCycleStartDay();
+  const [y, m] = month.split("-").map(Number);
+  const ref = new Date(y, m - 1, Math.max(1, startDay - 1));
+  return computeCycleWindow(startDay, 0, ref).endDate;
+}
+
+/** Ids of active employees eligible for the given payroll month's cycle. */
+async function getEligibleEmployeeIds(month) {
+  const endDate = await getCycleEndForMonth(month);
+  const emps = await Employee.find(joinedByCycleEndFilter(endDate)).select("employeeId").lean();
+  return emps.map((e) => e.employeeId);
+}
+
+/**
  * Build the full payroll dataset for a month (cycle window).
  * Returns { month, window, employees: [...] } where each employee has
  * salary breakdown, violation list, lop, worked days, net — with skips applied.
@@ -170,12 +202,13 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
   let employees;
   if (employeeId) {
     const emp = await Employee.findOne({ employeeId })
-      .select("employeeId firstName lastName fatherName designation department annualSalary officialEmail doj panNumber bankDetails address")
+      .select("employeeId firstName lastName nameAsPerAadhaar fatherName designation department annualSalary officialEmail doj panNumber bankDetails salaryAccountDetails address")
       .lean();
     employees = emp ? [emp] : [];
   } else {
-    employees = await Employee.find({ isActive: true })
-      .select("employeeId firstName lastName fatherName designation department annualSalary officialEmail doj panNumber bankDetails address")
+    // Only employees who had joined by the cycle END date (e.g. DOJ <= 15 Sep for Sep payroll)
+    employees = await Employee.find(joinedByCycleEndFilter(windowEnd))
+      .select("employeeId firstName lastName nameAsPerAadhaar fatherName designation department annualSalary officialEmail doj panNumber bankDetails salaryAccountDetails address")
       .lean();
   }
 
@@ -191,6 +224,9 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
   for (const emp of employees) {
     const ctcMonthly = (emp.annualSalary ?? 0) / 12;
     const breakdown = calculateSalaryFromCTC(ctcMonthly);
+
+    const hasSalaryAcc = !!(emp.salaryAccountDetails?.accountNumber);
+    const salaryAcc = hasSalaryAcc ? emp.salaryAccountDetails : (emp.bankDetails ?? {});
 
     const empViol = byEmp[emp.employeeId];
     const allDays = empViol?.days ?? [];
@@ -248,12 +284,14 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
         otherViolationCount,
         extraViolationDayCost: manualViolationDayCost, // manual violations add here
         standardDays: STANDARD_DAYS,
+        notMarkedDayCost: v.gracePolicy?.notMarkedDeductionDays ?? 2,
+        perViolationDayCost: v.gracePolicy?.violationDayCost ?? 0.5,
       });
     }
 
     result.push({
       employeeId: emp.employeeId,
-      name: `${emp.firstName} ${emp.lastName}`,
+      name: getDisplayName(emp),
       designation: emp.designation ?? "",
       department: emp.department ?? "",
       email: emp.officialEmail ?? "",
@@ -262,8 +300,23 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
 
       // Slip meta (exact template fields)
       joiningDate: emp.doj ? new Date(emp.doj).toISOString().split("T")[0] : "",
-      bankName: emp.bankDetails?.bankName ?? "",
-      accountNumber: emp.bankDetails?.accountNumber ?? "",
+      // Salary is paid to the salary account when HR has filled it; otherwise the personal account.
+      bankName: salaryAcc.bankName ?? "",
+      accountNumber: salaryAcc.accountNumber ?? "",
+      ifscCode: salaryAcc.ifscCode ?? "",
+      branchName: salaryAcc.branchName ?? "",
+      nameInBankAccount: salaryAcc.nameInBankAccount ?? "",
+      // Raw accounts, for reports: the personal account and the HR-maintained salary account
+      personalBankName: emp.bankDetails?.bankName ?? "",
+      personalBranchName: emp.bankDetails?.branchName ?? "",
+      personalNameInBankAccount: emp.bankDetails?.nameInBankAccount ?? "",
+      personalAccountNumber: emp.bankDetails?.accountNumber ?? "",
+      personalIfscCode: emp.bankDetails?.ifscCode ?? "",
+      salaryBankName: emp.salaryAccountDetails?.bankName ?? "",
+      salaryBranchName: emp.salaryAccountDetails?.branchName ?? "",
+      salaryNameInBankAccount: emp.salaryAccountDetails?.nameInBankAccount ?? "",
+      salaryAccountNumber: emp.salaryAccountDetails?.accountNumber ?? "",
+      salaryIfscCode: emp.salaryAccountDetails?.ifscCode ?? "",
       uanNo: emp.bankDetails?.uanNumber ?? "",
       pan: emp.panNumber ?? "",
       location: emp.address?.city ?? "Chennai",
@@ -283,6 +336,11 @@ async function buildPayroll(month, { employeeId, skipSnapshot = false } = {}) {
         breakViolations: d.breakViolations,
         isMissedClockOut: d.isMissedClockOut,
         isNotMarked: d.isNotMarked,
+        // Salary days this entry deducts (uses HR's violation-policy settings)
+        dayCost: d.isNotMarked
+          ? (v.gracePolicy?.notMarkedDeductionDays ?? 2)
+          : ((d.isLate ? 1 : 0) + (d.isEarlyLogout ? 1 : 0) + (d.hasBreakViolation ? (d.breakViolations?.length ?? 0) : 0) + (d.isMissedClockOut ? 1 : 0))
+            * (v.gracePolicy?.violationDayCost ?? 0.5),
         skipped: skipAll ? true : empSkips.has(violationId(d)),
       })),
       activeViolationCount: activeDays.length,
@@ -504,8 +562,7 @@ export const releasePayroll = async (req, res) => {
     if (Array.isArray(employeeIds) && employeeIds.length > 0) {
       targetIds = employeeIds;
     } else {
-      const allEmps = await Employee.find({ isActive: true }).select("employeeId").lean();
-      targetIds = allEmps.map((e) => e.employeeId);
+      targetIds = await getEligibleEmployeeIds(month);
       release.released = true;
       release.releasedAt = now;
       release.releasedBy = by;
@@ -725,6 +782,95 @@ export const addManualViolation = async (req, res) => {
   }
 };
 
+// ─── POST /api/payroll/manual-bulk ────────────────────────────────────────────
+// Save manual worked-days overrides and/or manual violations for MANY
+// employees in one request (one DB write).
+// Body: { month, entries: [{ employeeId,
+//                            workedDays?: number|null,   // key present → set/clear override
+//                            violation?: { message, date, dayCost } }] }
+// Each entry is validated independently; invalid / released ones are reported
+// in `failed` and the rest are still saved.
+export const bulkUpdateManualEntries = async (req, res) => {
+  try {
+    const { month, entries } = req.body;
+    if (!month || !Array.isArray(entries) || entries.length === 0)
+      return res.status(400).json({ success: false, message: "month and a non-empty entries array are required" });
+
+    const by = actorDetails(req);
+    const release = await getRelease(month);
+    const saved = [];
+    const failed = [];
+
+    for (const entry of entries) {
+      const employeeId = entry?.employeeId;
+      if (!employeeId) { failed.push({ employeeId: null, message: "employeeId missing" }); continue; }
+
+      const st0 = release.empState.find((x) => x.employeeId === employeeId);
+      const isReleased = st0 ? !!st0.released : !!release.released;
+      if (isReleased) { failed.push({ employeeId, message: "Slip is released. Revert it first to make changes." }); continue; }
+
+      const hasDays = Object.prototype.hasOwnProperty.call(entry, "workedDays");
+      const v = entry.violation;
+      if (!hasDays && !v) { failed.push({ employeeId, message: "Nothing to save" }); continue; }
+
+      // ── validate everything before touching state ──
+      let daysValue = null;
+      if (hasDays && entry.workedDays !== null && entry.workedDays !== "" && entry.workedDays !== undefined) {
+        daysValue = Number(entry.workedDays);
+        if (!Number.isFinite(daysValue) || daysValue < 0) { failed.push({ employeeId, message: "workedDays must be a non-negative number" }); continue; }
+        if (daysValue > 30) daysValue = 30;
+      }
+      let mv = null;
+      if (v) {
+        const cost = Number(v.dayCost);
+        if (!v.message || !String(v.message).trim() || !v.date) { failed.push({ employeeId, message: "violation needs message and date" }); continue; }
+        if (!Number.isFinite(cost) || cost <= 0) { failed.push({ employeeId, message: "dayCost must be a positive number" }); continue; }
+        mv = {
+          id: `mv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          message: String(v.message).trim(),
+          date: String(v.date),
+          dayCost: cost,
+        };
+      }
+
+      let idx = release.empState.findIndex((x) => x.employeeId === employeeId);
+      if (idx < 0) { release.empState.push({ employeeId, manualViolations: [] }); idx = release.empState.length - 1; }
+      const st = release.empState[idx];
+
+      if (hasDays) {
+        const previousValue = st.manualWorkedDays ?? null;
+        st.manualWorkedDays = daysValue;
+        logActivity(release, daysValue === null ? "MANUAL_WORKED_DAYS_CLEARED" : "MANUAL_WORKED_DAYS_SET", by, {
+          employeeId,
+          changes: [{ field: "manualWorkedDays", from: previousValue, to: daysValue }],
+          meta: { bulk: true },
+        });
+      }
+      if (mv) {
+        if (!st.manualViolations) st.manualViolations = [];
+        st.manualViolations.push(mv);
+        logActivity(release, "MANUAL_VIOLATION_ADDED", by, {
+          employeeId,
+          changes: [{ field: "manualViolations", from: null, to: mv }],
+          meta: { bulk: true },
+        });
+      }
+      saved.push(employeeId);
+    }
+
+    if (saved.length) {
+      release.updatedBy = actorLabel(by);
+      release.markModified("empState");
+      await release.save();
+    }
+
+    return res.status(200).json({ success: failed.length === 0, savedCount: saved.length, saved, failed });
+  } catch (err) {
+    console.error("bulkUpdateManualEntries Error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ─── DELETE /api/payroll/manual-violation?month=&employeeId=&violationId= ──────
 // Reads from query params (DELETE bodies are unreliable across HTTP clients).
 export const removeManualViolation = async (req, res) => {
@@ -777,10 +923,10 @@ export const unreleasePayroll = async (req, res) => {
       // entries for ALL active employees first, so clearing a few doesn't leave
       // the global flag contradicting per-employee state.
       if (release.released) {
-        const allEmps = await Employee.find({ isActive: true }).select("employeeId").lean();
-        for (const e of allEmps) {
-          const i = release.empState.findIndex((s) => s.employeeId === e.employeeId);
-          if (i < 0) release.empState.push({ employeeId: e.employeeId, released: true, releasedAt: release.releasedAt });
+        const eligibleIds = await getEligibleEmployeeIds(month);
+        for (const eid of eligibleIds) {
+          const i = release.empState.findIndex((s) => s.employeeId === eid);
+          if (i < 0) release.empState.push({ employeeId: eid, released: true, releasedAt: release.releasedAt });
           else if (release.empState[i].released !== false) release.empState[i].released = true;
         }
         release.released = false; // global flag retired; per-employee is now source of truth
@@ -1042,7 +1188,7 @@ export const generatePayrollReport = async (req, res) => {
     if (!Array.isArray(fields) || fields.length === 0)
       return res.status(400).json({ success: false, message: "Select at least one field" });
 
-    const { generatePayrollExcel, generatePayrollPDF } = await import("../services/payrollReportService.js");
+    const { generatePayrollExcel, generatePayrollPDF } = await import("../services/Payrollreportservice.js");
 
     const data = await buildPayroll(month);
 
