@@ -28,6 +28,10 @@ const violationGracePolicySchema = new mongoose.Schema(
     // Minutes before OfficeTiming.endTime before a salary early-logout violation
     logoutGraceMinutes: { type: Number, default: 0, min: 0 },
 
+    // Extra minutes after an approved permission ends before a late return
+    // becomes a salary violation
+    permissionGraceMinutes: { type: Number, default: 0, min: 0 },
+
     // Per-break-type grace (extra minutes over each break's allowedMinutes)
     breakGrace: { type: breakGraceSchema, default: () => ({}) },
 

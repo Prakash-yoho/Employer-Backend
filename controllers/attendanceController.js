@@ -13,6 +13,10 @@ import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
 // import { getNow } from "../utils/trueTime.js";
 import { getNow, correctedDate } from "../utils/trueTime.js";
+import {
+  getApprovedPermissions, getApprovedPermissionMap, classifyPermissions,
+  evalLogin, evalLogout, buildPermissionView, hhmm, clockMins,
+} from "../utils/permissionAttendance.js";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -89,9 +93,13 @@ export const clockIn = async (req, res) => {
     const cutoffMins = startTimeMins + timing.graceMinutes;
     const clockInMin = timeStrToMinutes(time);
 
-    const lateLogin = clockInMin != null && clockInMin > cutoffMins;
-    // Late minutes counted from actual start time, not from grace cutoff
-    const lateByMinutes = lateLogin ? Math.round(clockInMin - startTimeMins) : null;
+    // Approved permissions move the effective shift start (e.g. 09:30-10:30
+    // permission → no late warning until 10:30 + grace).
+    const perms = await getApprovedPermissions(employeeId, date);
+    const { lateLogin, lateByMinutes } = evalLogin({
+      clockInMins: clockInMin, startMins: startTimeMins,
+      endMins: hhmmToMinutes(timing.endTime), graceMinutes: timing.graceMinutes, perms,
+    });
 
     const [clockInImage, clockInLocation] = await Promise.all([
       uploadImage(image, "clock-in"),
@@ -147,6 +155,8 @@ export const startBreak = async (req, res) => {
     const lastBreak = attendance.breaks.at(-1);
     if (lastBreak && !lastBreak.end)
       return res.status(409).json({ error: "Break already in progress" });
+    if ((attendance.permissionEntries ?? []).some((x) => !x.end))
+      return res.status(409).json({ error: "You are out on permission — mark yourself back first" });
 
     // ── Validate breakType against policy ──────────────────────────────────
     const policy = await getBreakPolicy();
@@ -242,6 +252,126 @@ export const endBreak = async (req, res) => {
   }
 };
 
+// ─── Mid-shift permission (Out / In) ─────────────────────────────────────────
+function closePermissionEntry(entry, time, graceMinutes) {
+  entry.end = time;
+  const endMin = timeStrToMinutes(time);
+  const approvedEnd = hhmmToMinutes(entry.toTime);
+  const over = endMin != null && endMin > approvedEnd ? Math.round(endMin - approvedEnd) : 0;
+  entry.overByMinutes = over > 0 ? over : null;
+  entry.isViolation = over > (graceMinutes ?? 0);
+}
+
+// GET /api/attendance/permission/today  (employee) – today's approved permissions + state
+export const getTodayPermissions = async (req, res) => {
+  try {
+    const employeeId = req.user.employeeId;
+    const { date, time } = getNow();
+    const timing = await getOfficeTiming();
+    const [perms, att] = await Promise.all([
+      getApprovedPermissions(employeeId, date),
+      Attendance.findOne({ employeeId, date }).lean(),
+    ]);
+    const view = buildPermissionView(
+      att ?? { date },
+      perms,
+      {
+        startMins: hhmmToMinutes(timing.startTime), endMins: hhmmToMinutes(timing.endTime),
+        graceMinutes: timing.graceMinutes, permGrace: timing.permissionGraceMinutes ?? 5,
+        nowDate: date, nowMins: timeStrToMinutes(time),
+      },
+    );
+    return res.json({
+      success: true,
+      data: { permissions: view, permissionGraceMinutes: timing.permissionGraceMinutes ?? 5 },
+    });
+  } catch (err) {
+    console.error("getTodayPermissions error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/attendance/permission/start  (employee) – stepping out for an approved permission
+export const startPermission = async (req, res) => {
+  try {
+    const employeeId = req.user.employeeId;
+    const { date, time } = getNow();
+    if (!req.body?.image) return res.status(400).json({ error: "Face photo is required to step out" });
+    const attendance = await Attendance.findOne({ employeeId, date });
+    if (!attendance) return res.status(404).json({ error: "Clock in first" });
+    if (attendance.clockOut) return res.status(409).json({ error: "You have already clocked out" });
+    const lastBreak = attendance.breaks.at(-1);
+    if (lastBreak && !lastBreak.end) return res.status(409).json({ error: "End your break first" });
+    if ((attendance.permissionEntries ?? []).some((x) => !x.end))
+      return res.status(409).json({ error: "Permission already in progress" });
+
+    const timing = await getOfficeTiming();
+    const nowMins = timeStrToMinutes(time);
+    const perms = await getApprovedPermissions(employeeId, date);
+    const { list } = classifyPermissions(perms, hhmmToMinutes(timing.startTime), hhmmToMinutes(timing.endTime));
+    const recorded = new Set((attendance.permissionEntries ?? []).map((x) => x.requestId));
+
+    const wanted = req.body?.requestId;
+    const match = list.find(({ p, pf, pt, kind }) =>
+      kind === "MID" && !recorded.has(p.requestId) &&
+      (!wanted || p.requestId === wanted) &&
+      nowMins >= pf && nowMins < pt,
+    );
+    if (!match) {
+      return res.status(400).json({
+        error: "No approved permission is active right now. You can step out only during your approved permission time.",
+      });
+    }
+    // Face photo + location are captured on the client (same as breaks)
+    const { image, location } = req.body ?? {};
+    const startImage = await uploadImage(image, "permission-start");
+    attendance.permissionEntries.push({
+      requestId: match.p.requestId, fromTime: match.p.fromTime, toTime: match.p.toTime,
+      allowedMinutes: match.pt - match.pf, start: time,
+      startImage, startLocation: parseLocation(location),
+    });
+    await attendance.save();
+    return res.json({ success: true, message: "Permission started", data: attendance.toObject() });
+  } catch (err) {
+    console.error("startPermission error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /api/attendance/permission/end  (employee) – back from permission
+export const endPermission = async (req, res) => {
+  try {
+    const employeeId = req.user.employeeId;
+    const { date, time } = getNow();
+    if (!req.body?.image) return res.status(400).json({ error: "Face photo is required to mark yourself back" });
+    const attendance = await Attendance.findOne({ employeeId, date });
+    if (!attendance) return res.status(404).json({ error: "No clock-in found for today" });
+    const entry = (attendance.permissionEntries ?? []).find((x) => !x.end);
+    if (!entry) return res.status(404).json({ error: "No permission in progress" });
+
+    const timing = await getOfficeTiming();
+    closePermissionEntry(entry, time, timing.permissionGraceMinutes ?? 5);
+    entry.endImage = await uploadImage(req.body?.image, "permission-end");
+    entry.endLocation = parseLocation(req.body?.location);
+    attendance.markModified("permissionEntries");
+    await attendance.save();
+    return res.json({
+      success: true,
+      message: entry.isViolation ? `Back ${entry.overByMinutes} min after your permission ended` : "Welcome back",
+      _permissionFeedback: {
+        requestId: entry.requestId,
+        overByMinutes: entry.overByMinutes ?? 0,
+        isViolation: entry.isViolation,
+        allowedMinutes: entry.allowedMinutes,
+      },
+      data: attendance.toObject(),
+    });
+  } catch (err) {
+    console.error("endPermission error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 // Clock Out
 // ─── Clock Out ────────────────────────────────────────────────────────────────
 export const clockOut = async (req, res) => {
@@ -267,10 +397,19 @@ export const clockOut = async (req, res) => {
     const endTimeMins = hhmmToMinutes(timing.endTime);
     const clockOutMins = timeStrToMinutes(time);
 
-    const earlyLogout = clockOutMins != null && clockOutMins < endTimeMins;
-    const earlyByMinutes = earlyLogout
-      ? Math.round(endTimeMins - clockOutMins)
-      : null;
+    // Out on a permission → must mark "I'm back" before clocking out
+    if ((attendance.permissionEntries ?? []).some((x) => !x.end)) {
+      return res.status(409).json({
+        error: "You are out on permission. Mark yourself back (I'm back) before clocking out.",
+      });
+    }
+
+    // Approved permissions move the effective shift end (e.g. 17:30-18:30
+    // permission → clock out at 17:30 with no early-logout warning).
+    const perms = await getApprovedPermissions(employeeId, date);
+    const { earlyLogout, earlyByMinutes } = evalLogout({
+      clockOutMins, startMins: hhmmToMinutes(timing.startTime), endMins: endTimeMins, perms,
+    });
 
     const [clockOutImage, clockOutLocation] = await Promise.all([
       uploadImage(image, "clock-out"),
@@ -552,6 +691,14 @@ export const getAttendanceLogImages = async (req, res) => {
       }))
     );
 
+    const permissionsSigned = await Promise.all(
+      (log.permissionEntries ?? []).map(async (x) => ({
+        requestId: x.requestId, start: x.start, end: x.end,
+        startImage: await sign(x.startImage),
+        endImage: await sign(x.endImage),
+      }))
+    );
+
     return res.status(200).json({
       success: true,
       date: log.date,
@@ -560,6 +707,7 @@ export const getAttendanceLogImages = async (req, res) => {
       clockInImage: clockInSigned,
       clockOutImage: clockOutSigned,
       breaks: breaksSigned,
+      permissionEntries: permissionsSigned,
       expiresIn: 300,
     });
   } catch (err) {
@@ -659,6 +807,19 @@ const buildBreakStatus = (log, slots) => {
 };
 
 
+// Context for permission views (office hours + "now" in IST)
+const makePermCtx = (timing) => {
+  const { date, time } = getNow();
+  return {
+    startMins: hhmmToMinutes(timing.startTime),
+    endMins: hhmmToMinutes(timing.endTime),
+    graceMinutes: timing.graceMinutes ?? 0,
+    permGrace: timing.permissionGraceMinutes ?? 5,
+    nowDate: date,
+    nowMins: timeStrToMinutes(time),
+  };
+};
+
 // ─── Shared per-employee calendar builder ─────────────────────────────────────
 // Called for both ?month/year and the new ?startDate/endDate (salary cycle) mode
 const buildEmployeeCalendarRange = async ({
@@ -684,6 +845,8 @@ const buildEmployeeCalendarRange = async ({
   const holidayMap = {};
   for (const h of holidayDocs)
     holidayMap[dayjs.utc(h.date).format("YYYY-MM-DD")] = h;
+  const permCtx = makePermCtx(timing);
+  const permMap = await getApprovedPermissionMap([employeeId], startDate, capEnd);
 
   const fullCalendar = [];
   const cursor = new Date(startDate + "T00:00:00Z");
@@ -719,6 +882,7 @@ const buildEmployeeCalendarRange = async ({
         })),
         totalBreaks: log.breaks.length,
         breakStatus: buildBreakStatus(log, breakSlots),
+        permissions: buildPermissionView(log, permMap.get(`${employeeId}|${dateStr}`), permCtx),
         workDurationMinutes: workMinutes,
         breakDurationMinutes: breakMinutes,
         netWorkMinutes: workMinutes != null ? workMinutes - breakMinutes : null,
@@ -850,76 +1014,18 @@ export const getAllEmployeesAttendance = async (req, res) => {
           clockIn: { $ifNull: ["$attendanceRecord.clockIn", null] },
           clockOut: { $ifNull: ["$attendanceRecord.clockOut", null] },
           breaks: { $ifNull: ["$attendanceRecord.breaks", []] },
+          permissionEntries: { $ifNull: ["$attendanceRecord.permissionEntries", []] },
           hasRecord: { $cond: [{ $ifNull: ["$attendanceRecord", false] }, true, false] },
         },
       },
       {
         $addFields: {
+          // Uses the flag stored at clock-in, which already accounts for approved
+          // permissions (a login inside a start-of-shift permission is not Late).
           attendanceStatus: {
             $cond: [
               { $ifNull: ["$clockIn", false] },
-              {
-                $let: {
-                  vars: { parts: { $split: ["$clockIn", " "] } },
-                  in: {
-                    $let: {
-                      vars: {
-                        period: { $toUpper: { $arrayElemAt: ["$$parts", 1] } },
-                        timeParts: { $split: [{ $arrayElemAt: ["$$parts", 0] }, ":"] },
-                      },
-                      in: {
-                        $let: {
-                          vars: {
-                            rawHour: { $toInt: { $arrayElemAt: ["$$timeParts", 0] } },
-                            minute: { $toInt: { $arrayElemAt: ["$$timeParts", 1] } },
-                          },
-                          in: {
-                            $let: {
-                              vars: {
-                                // Correct 12-hour → 24-hour conversion
-                                hour: {
-                                  $switch: {
-                                    branches: [
-                                      // 12:xx AM → 0
-                                      {
-                                        case: { $and: [{ $eq: ["$$period", "AM"] }, { $eq: ["$$rawHour", 12] }] },
-                                        then: 0
-                                      },
-                                      // 12:xx PM → 12 (no change)
-                                      {
-                                        case: { $and: [{ $eq: ["$$period", "PM"] }, { $eq: ["$$rawHour", 12] }] },
-                                        then: 12
-                                      },
-                                      // 1–11 PM → add 12
-                                      {
-                                        case: { $eq: ["$$period", "PM"] },
-                                        then: { $add: ["$$rawHour", 12] }
-                                      },
-                                    ],
-                                    default: "$$rawHour"  // AM, not 12 → unchanged
-                                  }
-                                }
-                              },
-                              in: {
-                                $cond: [
-                                  {
-                                    $lte: [
-                                      { $add: [{ $multiply: ["$$hour", 60] }, "$$minute"] },
-                                      cutoffMinutes   // ← dynamic, e.g. 610
-                                    ]
-                                  },
-                                  "Present",
-                                  "Late"
-                                ]
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              },
+              { $cond: [{ $eq: ["$attendanceRecord.lateLogin", true] }, "Late", "Present"] },
               "Absent"
             ]
           }
@@ -942,6 +1048,9 @@ export const getAllEmployeesAttendance = async (req, res) => {
 
     const records = await Employee.aggregate(pipeline);
 
+    const listCtx = makePermCtx(timing ?? { startTime: "09:30", endTime: "19:00" });
+    const listPermMap = await getApprovedPermissionMap(records.map((r) => r.employeeId), targetDate, targetDate);
+
     const data = records.map((emp) => ({
       employeeId: emp.employeeId,
       name: `${emp.firstName} ${emp.lastName}` || emp.employeeId,
@@ -958,6 +1067,11 @@ export const getAllEmployeesAttendance = async (req, res) => {
       breakStatus: buildBreakStatus(
         { date: targetDate, clockIn: emp.clockIn, clockOut: emp.clockOut, breaks: emp.breaks },
         breakSlots,
+      ),
+      permissions: buildPermissionView(
+        { date: targetDate, clockIn: emp.clockIn, clockOut: emp.clockOut, permissionEntries: emp.permissionEntries },
+        listPermMap.get(`${emp.employeeId}|${targetDate}`),
+        listCtx,
       ),
       totalDays: 0,
       presentDays: 0,
@@ -1031,6 +1145,17 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
         });
       }
 
+      // 2b. Late return from a mid-shift permission
+      for (const pe of log.permissionEntries ?? []) {
+        if (pe.isViolation) {
+          violations.push({
+            type: "PERMISSION_OVERRUN",
+            message: `Returned ${pe.overByMinutes}m after permission ended (${pe.fromTime}–${pe.toTime}, grace: ${timing.permissionGraceMinutes ?? 5}m)`,
+            overByMinutes: pe.overByMinutes ?? null,
+          });
+        }
+      }
+
       // 3. Early logout — already computed and stored by clockOut controller
       if (log.earlyLogout) {
         violations.push({
@@ -1072,6 +1197,8 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       for (const log of logs) {
         logMap[log.date] = log;
       }
+      const permCtx = makePermCtx(timing);
+      const permMap = await getApprovedPermissionMap([employeeId], startDate, endDate);
 
       const holidayMap = {};
       for (const h of holidayDocs) {
@@ -1129,6 +1256,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
             })),
             totalBreaks: log.breaks.length,
             breakStatus: buildBreakStatus(log, breakSlots),
+            permissions: buildPermissionView(log, permMap.get(`${employeeId}|${log.date}`), permCtx),
             workDurationMinutes: workMinutes,
             breakDurationMinutes: totalBreakMinutes,
             netWorkMinutes:
@@ -1267,6 +1395,12 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
 
+    const pageCtx = makePermCtx(timing);
+    const pageDates = logs.map((l) => l.date).sort();
+    const pagePermMap = pageDates.length
+      ? await getApprovedPermissionMap([employeeId], pageDates[0], pageDates[pageDates.length - 1])
+      : new Map();
+
     const enrichedLogs = logs.map((log) => {
       const workMinutes = calcDurationMinutes(log.clockIn, log.clockOut);
       const totalBreakMinutes = log.breaks.reduce((acc, b) => {
@@ -1291,6 +1425,7 @@ export const getEmployeeAttendanceLogs = async (req, res) => {
         })),
         totalBreaks: log.breaks.length,
         breakStatus: buildBreakStatus(log, breakSlots),
+        permissions: buildPermissionView(log, pagePermMap.get(`${employeeId}|${log.date}`), pageCtx),
         workDurationMinutes: workMinutes,
         breakDurationMinutes: totalBreakMinutes,
         netWorkMinutes:
@@ -1359,6 +1494,19 @@ export const getEmployeeLogDetail = async (req, res) => {
       (acc, b) => acc + (b.duration || 0),
       0
     );
+    const permissionEntriesSigned = await Promise.all(
+      (log.permissionEntries ?? []).map(async (x) => ({
+        requestId: x.requestId, fromTime: x.fromTime, toTime: x.toTime,
+        start: x.start, end: x.end ?? null,
+        overByMinutes: x.overByMinutes ?? null, isViolation: !!x.isViolation,
+        startLocation: x.startLocation, endLocation: x.endLocation,
+        startImage: await signUrl(x.startImage),
+        endImage: await signUrl(x.endImage),
+        duration: calcDurationMinutes(x.start, x.end),
+      }))
+    );
+    const detailPerms = await getApprovedPermissions(log.employeeId, log.date);
+    const permissions = buildPermissionView(log.toObject(), detailPerms, makePermCtx(await getOfficeTiming()));
 
     return res.status(200).json({
       success: true,
@@ -1374,6 +1522,8 @@ export const getEmployeeLogDetail = async (req, res) => {
         clockOutLocation: log.clockOutLocation,
         breaks: breaksSigned,
         totalBreaks: log.breaks.length,
+        permissions,
+        permissionEntries: permissionEntriesSigned,
         workDurationMinutes: workMinutes,
         breakDurationMinutes: totalBreakMinutes,
         netWorkMinutes:

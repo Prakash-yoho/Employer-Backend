@@ -15,6 +15,10 @@ import {
     createPermissionValidation,
     updatePermissionStatusValidation,
 } from '../validations/leaveValidation.js';
+import Attendance from '../model/Attendance.js';
+import OfficeTiming from '../model/Officetiming.js';
+import { getNow } from '../utils/trueTime.js';
+import { permissionStarted, reconcileAttendance, hhmm, clockMins } from '../utils/permissionAttendance.js';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 
@@ -40,7 +44,47 @@ const fmtPerm = (p) => ({
     rejectedComments: p.rejectedComments,
     cancelReason: p.cancelReason,
     cancelledAt: p.cancelledAt,
+    cancelledByEmployee: !!p.cancelledByEmployee,
 });
+
+// ─── Started? (cancel lock) ───────────────────────────────────────────────────
+// An approved permission can no longer be cancelled once it has started —
+// either its start time has been reached or the employee already stepped out.
+const hasPermissionStarted = async (p) => {
+    const { date, time } = getNow();
+    const att = await Attendance.findOne({ employeeId: p.employeeId, date: toStr(p.date) }).lean();
+    return permissionStarted(p, date, clockMins(time), att);
+};
+
+const reconcileSafe = async (p) => {
+    try {
+        let timing = await OfficeTiming.findOne({ key: 'default' });
+        if (!timing) timing = await OfficeTiming.create({ key: 'default' });
+        await reconcileAttendance(p.employeeId, toStr(p.date), timing);
+    } catch (err) {
+        console.error('reconcile attendance after permission change failed:', err);
+    }
+};
+
+// fmtPerm + `started` (true once an APPROVED permission has begun → cannot be cancelled)
+const withStarted = async (perms) => {
+    const { date, time } = getNow();
+    const nowMins = clockMins(time);
+    const approved = perms.filter((p) => p.status === 'APPROVED');
+    const atts = approved.length
+        ? await Attendance.find({
+            employeeId: { $in: [...new Set(approved.map((p) => p.employeeId))] },
+            date: { $in: [...new Set(approved.map((p) => toStr(p.date)))] },
+        }).select('employeeId date permissionEntries').lean()
+        : [];
+    const attMap = new Map(atts.map((a) => [`${a.employeeId}|${a.date}`, a]));
+    return perms.map((p) => ({
+        ...fmtPerm(p),
+        started: p.status === 'APPROVED'
+            ? permissionStarted(p, date, nowMins, attMap.get(`${p.employeeId}|${toStr(p.date)}`))
+            : false,
+    }));
+};
 
 // ─── EMPLOYEE: Apply permission ───────────────────────────────────────────────
 
@@ -177,7 +221,7 @@ export const getMyPermissions = async (req, res) => {
             Permission.find({ employee: req.user._id }).sort({ appliedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
             Permission.countDocuments({ employee: req.user._id }),
         ]);
-        return res.json({ success: true, data: { permissions: perms.map(fmtPerm), pagination: paginate(total, page, limit) } });
+        return res.json({ success: true, data: { permissions: await withStarted(perms), pagination: paginate(total, page, limit) } });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
     }
@@ -189,8 +233,11 @@ export const cancelPermissionRequest = async (req, res) => {
     try {
         const p = await Permission.findOne({ requestId: req.params.requestId, employee: req.user._id });
         if (!p) return res.status(404).json({ success: false, message: 'Not found' });
-        if (p.status !== 'PENDING')
+        if (!['PENDING', 'APPROVED'].includes(p.status))
             return res.status(400).json({ success: false, message: `Cannot cancel a ${p.status.toLowerCase()} permission` });
+        if (p.status === 'APPROVED' && await hasPermissionStarted(p))
+            return res.status(400).json({ success: false, code: 'PERMISSION_STARTED', message: 'This permission has already started and can no longer be cancelled' });
+        const wasApproved = p.status === 'APPROVED';
 
         // ── Validate cancel reason (compulsory, min 10 / max 500 chars) ──────
         const cancelReason = sanitize(req.body?.cancelReason ?? '');
@@ -206,6 +253,8 @@ export const cancelPermissionRequest = async (req, res) => {
         p.cancelledByEmployee = true;
         p.cancelReason = cancelReason;
         await p.save();
+        // A cancelled approved permission is "not taken" → normal late / early rules apply again
+        if (wasApproved) await reconcileSafe(p);
 
         // ── Email HR ─────────────────────────────────────────────────────────
         sendMail({
@@ -260,7 +309,7 @@ export const getAllPermissions = async (req, res) => {
             Permission.find(q).sort({ appliedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
             Permission.countDocuments(q),
         ]);
-        return res.json({ success: true, data: { permissions: perms.map(fmtPerm), pagination: paginate(total, page, limit) } });
+        return res.json({ success: true, data: { permissions: await withStarted(perms), pagination: paginate(total, page, limit) } });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
     }
@@ -282,6 +331,8 @@ export const updatePermissionStatus = async (req, res) => {
             p.status = 'REJECTED'; p.rejectedBy = req.user._id; p.rejectedComments = comments || null; p.rejectedAt = new Date();
         }
         await p.save();
+        // Approving a permission after the fact must re-evaluate that day's late / early flags
+        if (status === 'APPROVED') await reconcileSafe(p);
 
         // ── Notification to employee ─────────────────────────────────────────
         await Notification.create({
@@ -330,3 +381,48 @@ export const updatePermissionStatus = async (req, res) => {
         return res.status(500).json({ success: false, message: err.message });
     }
 };
+
+// ─── HR/ADMIN: Cancel an APPROVED permission (only before it starts) ──────────
+export const hrCancelPermission = async (req, res) => {
+    try {
+        const p = await Permission.findOne({ requestId: req.params.requestId });
+        if (!p) return res.status(404).json({ success: false, message: 'Not found' });
+        if (p.status !== 'APPROVED')
+            return res.status(400).json({ success: false, message: `Only approved permissions can be cancelled (this one is ${p.status.toLowerCase()})` });
+
+        if (await hasPermissionStarted(p))
+            return res.status(400).json({
+                success: false, code: 'PERMISSION_STARTED',
+                message: 'Permission started — this approved permission is already in progress / over and can no longer be cancelled.',
+            });
+
+        const reason = sanitize(req.body?.cancelReason ?? '');
+        if (reason.length < 10)
+            return res.status(400).json({ success: false, message: 'Cancellation reason must be at least 10 characters' });
+        if (reason.length > 500)
+            return res.status(400).json({ success: false, message: 'Cancellation reason cannot exceed 500 characters' });
+
+        p.status = 'CANCELLED';
+        p.cancelledAt = new Date();
+        p.cancelledByEmployee = false;
+        p.cancelReason = reason;
+        await p.save();
+        await reconcileSafe(p);
+
+        await Notification.create({
+            title: 'Permission Cancelled',
+            description: `Your approved permission (${p.requestId}) on ${toStr(p.date)} ${p.fromTime}–${p.toTime} was cancelled by HR.`,
+            type: 'LEAVE_CANCELLED',
+            recipientType: 'EMPLOYEE', recipientId: p.employee, recipientModel: 'Employee',
+            senderId: req.user._id, senderModel: 'EmployerUser',
+            relatedEntityType: 'Permission', relatedEntityId: p._id,
+            status: 'unread', priority: 'medium',
+        });
+
+        return res.json({ success: true, message: 'Permission cancelled', data: { requestId: p.requestId, status: fmtStatus(p.status) } });
+    } catch (err) {
+        console.error('hrCancelPermission error:', err);
+        return res.status(500).json({ success: false, message: err.message });
+    }
+};
+

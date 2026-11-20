@@ -12,6 +12,10 @@ const officeTimingSchema = new Schema(
     // Grace period in minutes after startTime before a login is "Late"
     graceMinutes:  { type: Number, default: 5 },
 
+    // Grace (minutes) after an approved mid-shift permission ends before the
+    // employee gets a "late return" warning
+    permissionGraceMinutes: { type: Number, default: 5, min: 0 },
+
     updatedBy: { type: String, default: null }, // employeeId of last editor
   },
   { timestamps: true }

@@ -278,6 +278,20 @@ export async function computeSalaryViolations(opts = {}) {
       // Violation only counts when the overrun exceeds this break's grace
       .filter((b) => b.overByMinutes > (b.graceMinutes ?? 0));
 
+    // Late return from an approved mid-shift permission (own grace setting)
+    const permGrace = gracePolicy.permissionGraceMinutes ?? 0;
+    for (const pe of log.permissionEntries ?? []) {
+      if (pe.overByMinutes > 0 && pe.overByMinutes > permGrace) {
+        salaryBreakViolations.push({
+          breakType:      "PERMISSION",
+          allowedMinutes: pe.allowedMinutes ?? 0,
+          overByMinutes:  pe.overByMinutes,
+          takenMinutes:   (pe.allowedMinutes ?? 0) + pe.overByMinutes,
+          graceMinutes:   permGrace,
+        });
+      }
+    }
+
     const hasBreakViolation = salaryBreakViolations.length > 0;
 
     const isMissedClockOut =
@@ -408,12 +422,13 @@ export const getViolationGracePolicy = async (req, res) => {
 // Body: { loginGraceMinutes, logoutGraceMinutes, breakGrace: { MORNING, LUNCH, EVENING } }
 export const updateViolationGracePolicy = async (req, res) => {
   try {
-    const { loginGraceMinutes, logoutGraceMinutes, breakGrace, violationDayCost, notMarkedDeductionDays } = req.body;
+    const { loginGraceMinutes, logoutGraceMinutes, permissionGraceMinutes, breakGrace, violationDayCost, notMarkedDeductionDays } = req.body;
     const updatedBy = req.user?.employeeId ?? null;
 
     const update = {};
     if (loginGraceMinutes  !== undefined) update.loginGraceMinutes  = Number(loginGraceMinutes);
     if (logoutGraceMinutes !== undefined) update.logoutGraceMinutes = Number(logoutGraceMinutes);
+    if (permissionGraceMinutes !== undefined) update.permissionGraceMinutes = Math.max(0, Number(permissionGraceMinutes) || 0);
 
     if (breakGrace !== undefined) {
       update.breakGrace = {

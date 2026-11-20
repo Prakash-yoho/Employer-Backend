@@ -25,6 +25,25 @@ const breakSchema = new Schema(
   { _id: false }
 );
 
+// Mid-shift permission "Out / In" record (only for APPROVED permissions)
+const permissionEntrySchema = new Schema(
+  {
+    requestId:        { type: String, required: true },
+    fromTime:         { type: String, default: null }, // approved window "HH:MM"
+    toTime:           { type: String, default: null },
+    allowedMinutes:   { type: Number, default: null },
+    start:            { type: String, default: null }, // "h:mm:ss A" when employee stepped out
+    end:              { type: String, default: null }, // "h:mm:ss A" when employee was back
+    overByMinutes:    { type: Number, default: null }, // minutes after approved end
+    isViolation:      { type: Boolean, default: false },
+    startImage:       { type: String, default: null },
+    endImage:         { type: String, default: null },
+    startLocation:    { type: locationSchema, default: null },
+    endLocation:      { type: locationSchema, default: null },
+  },
+  { _id: false }
+);
+
 const attendanceSchema = new Schema(
   {
     employeeId: { type: String, required: true },
@@ -37,6 +56,7 @@ const attendanceSchema = new Schema(
     lateByMinutes:   { type: Number,  default: null },
 
     breaks: { type: [breakSchema], default: [] },
+    permissionEntries: { type: [permissionEntrySchema], default: [] },
 
     clockOut:         { type: String, default: null },
     clockOutImage:    { type: String, default: null },

@@ -60,13 +60,14 @@ export const getOfficeTiming = async (req, res) => {
 // Body: { startTime, endTime, graceMinutes }
 export const updateOfficeTiming = async (req, res) => {
   try {
-    const { startTime, endTime, graceMinutes } = req.body;
+    const { startTime, endTime, graceMinutes, permissionGraceMinutes } = req.body;
     const updatedBy = req.user?.employeeId ?? null;
 
     const update = {};
     if (startTime !== undefined) update.startTime = startTime;
     if (endTime !== undefined) update.endTime = endTime;
     if (graceMinutes !== undefined) update.graceMinutes = Number(graceMinutes);
+    if (permissionGraceMinutes !== undefined) update.permissionGraceMinutes = Math.max(0, Number(permissionGraceMinutes) || 0);
     if (updatedBy) update.updatedBy = updatedBy;
 
     const timing = await OfficeTiming.findOneAndUpdate(
@@ -160,6 +161,22 @@ export const getViolationsReport = async (req, res) => {
             overFormatted: fmtMins(b.overByMinutes),
           };
         });
+
+      // Late return from an approved mid-shift permission → shown like a break overrun
+      for (const pe of log.permissionEntries ?? []) {
+        if (pe.isViolation && pe.overByMinutes > 0) {
+          const allowed = pe.allowedMinutes ?? 0;
+          breakViolations.push({
+            breakType: "PERMISSION",
+            takenMinutes: allowed + pe.overByMinutes,
+            takenFormatted: fmtMins(allowed + pe.overByMinutes),
+            allowedMinutes: allowed,
+            allowedFormatted: fmtMins(allowed),
+            overByMinutes: pe.overByMinutes,
+            overFormatted: fmtMins(pe.overByMinutes),
+          });
+        }
+      }
 
       const hasBreakViolation = breakViolations.length > 0;
 

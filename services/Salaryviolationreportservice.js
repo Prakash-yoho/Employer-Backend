@@ -24,7 +24,7 @@ const fmtMin = (m) => {
   return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
 };
 
-const BREAK_LABEL = { MORNING: 'Morning', LUNCH: 'Lunch', EVENING: 'Evening' };
+const BREAK_LABEL = { PERMISSION: "Permission", MORNING: 'Morning', LUNCH: 'Lunch', EVENING: 'Evening' };
 
 /**
  * Generate a Salary Violation Report PDF for ONE employee.
