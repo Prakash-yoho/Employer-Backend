@@ -4,6 +4,7 @@
  */
 
 import Leave from '../model/Leave.js';
+import Permission from '../model/Permission.js';
 import Employee from '../model/Employee.js';
 import EmployerUser from '../model/EmployerUser.js';
 import Notification from '../model/Notification.js';
@@ -594,6 +595,19 @@ export const updateLeaveStatus = async (req, res) => {
         }
 
         return res.json({ success: true, message: `Leave ${status.toLowerCase()}${isPastLeave ? ' (leave has already started)' : ''}`, data: { requestId: updated.requestId, status: fmtStatus(status), isPastLeave, comments: comments || null } });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+// GET /api/leaves/pending-counts  (HR/Admin) – sidebar badges: requests still awaiting a decision
+export const getPendingApprovalCounts = async (_req, res) => {
+    try {
+        const [leaves, permissions] = await Promise.all([
+            Leave.countDocuments({ status: 'PENDING' }),
+            Permission.countDocuments({ status: 'PENDING' }),
+        ]);
+        return res.json({ success: true, data: { leaves, permissions } });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
     }

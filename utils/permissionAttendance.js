@@ -82,7 +82,7 @@ export async function getApprovedPermissionMap(employeeIds, dateFrom, dateTo) {
  * extend the cover.
  */
 export function classifyPermissions(perms, startMins, endMins) {
-  const list = (perms ?? []).map((p) => ({ p, pf: hhmm(p.fromTime), pt: hhmm(p.toTime), kind: "MID" }));
+  let list = (perms ?? []).map((p) => ({ p, pf: hhmm(p.fromTime), pt: hhmm(p.toTime), kind: "MID", ids: [p.requestId] }));
   let effStart = startMins;
   let changed = true;
   while (changed) {
@@ -103,7 +103,42 @@ export function classifyPermissions(perms, startMins, endMins) {
       }
     }
   }
+
+  // Back-to-back mid-shift permissions (10:30-11:30 + 11:30-12:30) behave as ONE
+  // permission: one step out, one "I'm back", measured against the chain end.
+  const mids = list.filter((x) => x.kind === "MID").sort((a, b) => a.pf - b.pf);
+  const absorbed = new Set();
+  let head = null;
+  for (const x of mids) {
+    if (head && x.pf <= head.pt) {
+      head.pt = Math.max(head.pt, x.pt);
+      head.ids.push(...x.ids);
+      head.hours += Number(x.p.durationHours) || 0;
+      absorbed.add(x);
+    } else {
+      head = x;
+      head.hours = Number(x.p.durationHours) || 0;
+    }
+  }
+  for (const x of mids) {
+    if (x.ids.length > 1 && !absorbed.has(x)) {
+      const mins = x.pt - x.pf;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      x.p = {
+        ...x.p,
+        toTime: `${String(Math.floor(x.pt / 60)).padStart(2, "0")}:${String(x.pt % 60).padStart(2, "0")}`,
+        durationHours: x.hours,
+        durationText: h > 0 ? `${h}h${m ? ` ${m}min` : ""}` : `${m}min`,
+      };
+    }
+  }
+  list = list.filter((x) => !absorbed.has(x));
   return { list, effStart, effEnd };
+}
+
+/** The attendance entry (if any) recorded for a classified permission / chain */
+export function findEntry(entries, item) {
+  return (entries ?? []).find((e) => item.ids.includes(e.requestId));
 }
 
 /**
@@ -163,6 +198,22 @@ export async function reconcileAttendance(employeeId, date, timing) {
     att.earlyLogout = r.earlyLogout;
     att.earlyByMinutes = r.earlyByMinutes;
   }
+  // A later-approved extension moves the end of an already-recorded permission
+  const permGrace = timing.permissionGraceMinutes ?? 5;
+  const { list: chains } = classifyPermissions(perms, startMins, endMins);
+  for (const entry of att.permissionEntries ?? []) {
+    const chain = chains.find((c) => c.ids.includes(entry.requestId));
+    if (!chain || chain.kind !== "MID") continue;
+    entry.toTime = chain.p.toTime;
+    entry.allowedMinutes = chain.pt - chain.pf;
+    if (entry.end) {
+      const endMin = clockMins(entry.end);
+      const over = endMin != null && endMin > chain.pt ? Math.round(endMin - chain.pt) : 0;
+      entry.overByMinutes = over > 0 ? over : null;
+      entry.isViolation = over > permGrace;
+    }
+    att.markModified("permissionEntries");
+  }
   const approvedIds = new Set(perms.map((p) => p.requestId));
   const before = att.permissionEntries?.length ?? 0;
   att.permissionEntries = (att.permissionEntries ?? []).filter((e) => approvedIds.has(e.requestId));
@@ -185,9 +236,9 @@ export function buildPermissionView(log, perms, { startMins, endMins, graceMinut
   const inMins = clockMins(log?.clockIn);
   const outMins = clockMins(log?.clockOut);
 
-  return list.map(({ p, pf, pt, kind }) => {
+  return list.map(({ p, pf, pt, kind, ids }) => {
     const base = {
-      requestId: p.requestId, kind,
+      requestId: p.requestId, requestIds: ids, kind,
       fromTime: p.fromTime, toTime: p.toTime,
       durationText: p.durationText || "", durationHours: p.durationHours,
       reason: p.reason,
@@ -216,7 +267,7 @@ export function buildPermissionView(log, perms, { startMins, endMins, graceMinut
     }
 
     // MID
-    const entry = (log?.permissionEntries ?? []).find((e) => e.requestId === p.requestId);
+    const entry = (log?.permissionEntries ?? []).find((e) => ids.includes(e.requestId));
     if (entry) {
       if (!entry.end) {
         const overdue = isToday && nowMins > pt + permGrace;

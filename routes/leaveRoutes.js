@@ -8,6 +8,7 @@ import {
     getAllLeaveRequests,
     updateLeaveStatus,
     getLeaveStatistics,
+    getPendingApprovalCounts,
     getLeaveBalance,
     cancelLeaveRequest,
     getUpcomingLeaves,
@@ -32,6 +33,7 @@ router.get('/blocked-dates', authenticateEmployee, getBlockedDates);
 
 // ─── HR/ADMIN: Leave ──────────────────────────────────────────────────────────
 router.get('/', authenticate, authorize(['EMPLOYER_HR', 'EMPLOYER_ADMIN']), getAllLeaveRequests);
+router.get('/pending-counts', authenticate, authorize(['EMPLOYER_HR', 'EMPLOYER_ADMIN']), getPendingApprovalCounts);
 router.get('/statistics/overview', authenticate, getLeaveStatistics);
 router.get('/:leaveRequestId', authenticate, authorize(['EMPLOYER_HR', 'EMPLOYER_ADMIN']), getLeaveRequestById);
 router.patch('/:leaveRequestId/status', authenticate, authorize(['EMPLOYER_HR', 'EMPLOYER_ADMIN']), updateLeaveStatus);

@@ -245,7 +245,8 @@ export const createPermissionValidation = Joi.object({
     if (totalMinutes > 480)
         return helpers.error('object.timeExceedsLimit');
     // Permissions are booked in 30-minute steps: 30 min, 1 hr, 1 hr 30 min, 2 hrs …
-    if (totalMinutes % 30 !== 0)
+    // TESTING ONLY: PERMISSION_TEST_MODE=true in .env allows any number of minutes
+    if (process.env.PERMISSION_TEST_MODE !== 'true' && totalMinutes % 30 !== 0)
         return helpers.error('object.timeStep');
 
     return value;

@@ -31,8 +31,13 @@ const permissionSchema = new Schema({
     durationHours: {
         type: Number,
         required: true,
-        min: 0.5,
-        max: 12
+        max: 12,
+        // Half-hour minimum. TESTING ONLY: PERMISSION_TEST_MODE=true allows any positive duration
+        // (checked at validation time because models load before dotenv.config())
+        validate: {
+            validator: (v) => (process.env.PERMISSION_TEST_MODE === 'true' ? v > 0 : v >= 0.5),
+            message: (props) => `durationHours (${props.value}) is less than the minimum allowed value (0.5)`
+        }
     },
     durationText: { type: String, default: '' },
     reason: {

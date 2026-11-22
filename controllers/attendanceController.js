@@ -312,8 +312,8 @@ export const startPermission = async (req, res) => {
     const recorded = new Set((attendance.permissionEntries ?? []).map((x) => x.requestId));
 
     const wanted = req.body?.requestId;
-    const match = list.find(({ p, pf, pt, kind }) =>
-      kind === "MID" && !recorded.has(p.requestId) &&
+    const match = list.find(({ p, pf, pt, kind, ids }) =>
+      kind === "MID" && !ids.some((i) => recorded.has(i)) &&
       (!wanted || p.requestId === wanted) &&
       nowMins >= pf && nowMins < pt,
     );
@@ -350,6 +350,16 @@ export const endPermission = async (req, res) => {
     if (!entry) return res.status(404).json({ error: "No permission in progress" });
 
     const timing = await getOfficeTiming();
+    // Back-to-back approved permissions count as one → measure against the chain end
+    const { list: chains } = classifyPermissions(
+      await getApprovedPermissions(employeeId, date),
+      hhmmToMinutes(timing.startTime), hhmmToMinutes(timing.endTime),
+    );
+    const chain = chains.find((c) => c.kind === "MID" && c.ids.includes(entry.requestId));
+    if (chain) {
+      entry.toTime = chain.p.toTime;
+      entry.allowedMinutes = chain.pt - chain.pf;
+    }
     closePermissionEntry(entry, time, timing.permissionGraceMinutes ?? 5);
     entry.endImage = await uploadImage(req.body?.image, "permission-end");
     entry.endLocation = parseLocation(req.body?.location);
