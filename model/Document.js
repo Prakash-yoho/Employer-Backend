@@ -112,6 +112,12 @@ const documentSchema = new Schema({
         default: () => ({})
     },
 
+    // Salary account passbook / cheque book image — OPTIONAL (employees often have no salary account at joining)
+    salaryPassbook: {
+        type: documentFieldSchema,
+        default: () => ({})
+    },
+
     signedOfferLetter: {
         type: documentFieldSchema,
         default: () => ({})
@@ -255,7 +261,7 @@ documentSchema.pre('save', async function (next) {
 
         const optionalFields = [
             'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate','pgconsolidatedCertificate','diplomaconsolidatedCertificate',
-            'diplomaCertificate', 'pgCertificate'
+            'diplomaCertificate', 'pgCertificate', 'salaryPassbook'
         ];
 
         let totalDocuments = 0;

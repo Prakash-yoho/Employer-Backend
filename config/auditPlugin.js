@@ -58,7 +58,11 @@ const auditPlugin = (schema) => {
     });
 
     // ── Bulk creates (Model.insertMany) ──
-    schema.pre('insertMany', function (next, docs) {
+    // Mongoose 9 no longer passes a `next` callback to this hook, older versions did
+    // → accept both shapes (this was throwing "next is not a function").
+    schema.pre('insertMany', function (...args) {
+        const next = args.find((a) => typeof a === 'function');
+        const docs = args.find((a) => Array.isArray(a));
         try {
             const actor = getAuditActor();
             if (actor && Array.isArray(docs)) {
@@ -71,7 +75,7 @@ const auditPlugin = (schema) => {
         } catch {
             /* never block the actual operation */
         }
-        next();
+        if (next) next();
     });
 
     // ── Query updates (findByIdAndUpdate / findOneAndUpdate / updateOne / updateMany) ──

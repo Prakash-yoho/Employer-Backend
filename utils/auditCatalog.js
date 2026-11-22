@@ -65,6 +65,7 @@ export const MODULES = [
     'Appraisals',
     'Leave Management',
     'Permissions',
+    'Data Update Access',
     'Leave Policy',
     'Holidays',
     'Office Timings',
@@ -176,6 +177,14 @@ add('PATCH', '/api/permissions/updatestatus/:requestId', {
     title: (c) => `${c.body?.status === 'REJECTED' ? 'Rejected' : 'Approved'} permission request`,
     entity: 'Permission', note: (c) => (c.body?.comments ? `Comment: ${quote(c.body.comments)}` : ''),
 });
+
+// ── Data update access (HR opens fields for employees to edit) ──────────────
+add('POST', '/api/data-updates', {
+    module: 'Data Update Access', action: 'ASSIGN', title: 'Gave employees access to update selected details',
+    entity: 'DataUpdateAccess', emp: ['body.employeeIds'],
+    note: (c) => [c.body?.scope === 'ALL' ? 'All employees' : `${(c.body?.employeeIds || []).length} employee(s)`, `${(c.body?.fields || []).length} field(s)`].join(' · '),
+});
+add('PATCH', '/api/data-updates/batches/:batchId/cancel', { module: 'Data Update Access', action: 'REVOKE', title: 'Cancelled pending data-update access', entity: 'DataUpdateAccess' });
 
 // ── Policies / settings ────────────────────────────────────────────────────
 add('POST', '/api/leavepolicy/createpolicy', { module: 'Leave Policy', action: 'CREATE', title: 'Created leave policy', entity: 'LeavePolicy' });
@@ -318,7 +327,7 @@ export const isTrackedRead = (path) => Boolean(matchRule('GET', path)?.rule.read
 const SEGMENT_MODULE = {
     employees: 'Employees', documents: 'Documents', 'identity-cards': 'Identity Cards',
     tickets: 'Tickets', assets: 'Assets', leaves: 'Leave Management', leavepolicy: 'Leave Policy',
-    holidays: 'Holidays', permissions: 'Permissions', 'office-timing': 'Office Timings',
+    holidays: 'Holidays', permissions: 'Permissions', 'data-updates': 'Data Update Access', 'office-timing': 'Office Timings',
     'break-policy': 'Break Policy', salaryviolations: 'Salary Policy', payslips: 'Payroll',
     announcements: 'Announcements',
     'phases-schedules': 'Seat Allotment', projects: 'Projects',

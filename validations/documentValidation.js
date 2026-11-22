@@ -32,6 +32,7 @@ export const createUpdateDocumentSchema = Joi.object({
     twelfthCertificate: documentFieldValidation,
     ugCertificate: documentFieldValidation,
     bankPassbook: documentFieldValidation,
+    salaryPassbook: documentFieldValidation,
     signedOfferLetter: documentFieldValidation,
     interviewresume: documentFieldValidation,
     passportPhoto: documentFieldValidation,

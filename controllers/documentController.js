@@ -120,7 +120,7 @@ export const uploadDocument = async (req, res) => {
             'twelfthCertificate', 'ugCertificate', 'bankPassbook', 'signedOfferLetter',
             'drivingLicense', 'passport', 'birthCertificate', 'consolidatedCertificate', 'pgconsolidatedCertificate', 'diplomaconsolidatedCertificate',
             'diplomaCertificate', 'pgCertificate', 'trainingCertificates', 'interviewresume',
-            'passportPhoto'
+            'passportPhoto', 'salaryPassbook'
         ];
 
         const validExperienceSubTypes = [
@@ -1069,6 +1069,7 @@ export const previewDocument = async (req, res) => {
                 diplomaconsolidatedCertificate: 'diplomaconsolidatedCertificate',
                 signedOfferLetter: 'signedOfferLetter',
                 bankPassbook: 'bankPassbook',
+                salaryPassbook: 'salaryPassbook',
                 passportPhoto: 'passportPhoto'
             };
 
@@ -1217,6 +1218,7 @@ export const downloadDocument = async (req, res) => {
                 diplomaconsolidatedCertificate: 'diplomaconsolidatedCertificate',
                 signedOfferLetter: 'signedOfferLetter',
                 bankPassbook: 'bankPassbook',
+                salaryPassbook: 'salaryPassbook',
                 passportPhoto: 'passportPhoto'
             };
 
@@ -1564,6 +1566,7 @@ const DOC_LABELS = {
     pgconsolidatedCertificate: 'PG Consolidated Certificate',
     diplomaconsolidatedCertificate: 'Diploma Consolidated Certificate',
     signedOfferLetter: 'Signed Offer Letter', bankPassbook: 'Bank Passbook',
+    salaryPassbook: 'Salary Account Passbook',
 };
 
 // Every uploaded file of one Document record -> [{ folder, label, d }]

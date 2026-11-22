@@ -34,6 +34,7 @@ import Violationgracepolicyroutes from "./routes/Violationgracepolicyroutes.js"
 import announcementRoutes from './routes/announcementRoutes.js'
 import payrollRoutes from "./routes/payrollRoutes.js";
 import auditLogRoutes from './routes/auditLogRoutes.js'
+import dataUpdateRoutes from './routes/dataUpdateRoutes.js'
 import "./cron/midnightSweep.js";
 import { syncTrueTime } from './utils/trueTime.js';
 import { getTimeStatus } from './utils/trueTime.js';
@@ -100,6 +101,7 @@ app.use('/api/leaves', leaveRoutes)
 app.use('/api/leavepolicy', leavePolicyRoutes)
 app.use('/api/holidays', holidayRoutes)
 app.use('/api/permissions', permissionRoutes)
+app.use('/api/data-updates', dataUpdateRoutes)
 app.use('/api/office-timing', OfficeTimingRoutes)
 app.use("/api/admin/attendance", attendanceRoutes);
 app.use("/api/attendance", attendanceRoutes);

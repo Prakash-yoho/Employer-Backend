@@ -27,6 +27,7 @@ const notificationSchema = new Schema({
             'EMPLOYEE_UPDATE_APPROVED',  // When HR approves update request
             'EMPLOYEE_UPDATE_REJECTED',  // When HR rejects update request
             'EMPLOYEE_UPDATE_STATUS_RESET', // When HR resets update request status
+            'DATA_UPDATE_REQUEST',       // When HR opens specific fields for the employee to update
             // DOCUMENT RELATED
             'DOCUMENT_UPLOADED',         // When employee uploads document
             'DOCUMENT_VERIFIED',         // When HR verifies document
